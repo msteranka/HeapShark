@@ -1,5 +1,6 @@
 #include "pin.H"
 #include <unordered_map>
+#include <vector>
 #include <fstream>
 #include <iostream>
 #include <cstdio>
@@ -21,18 +22,38 @@
 #endif // PROF_DEBUG
 
 /*
-    * TODO: Take into consideration when objects are reused.
-    * Upon calling free(), move the corresponding entry in m
-    * to a new unordered_map that keeps track of all objects
-    * ever spewed out by the allocator and print its contents
-    * upon termination.
+    * Take into consideration what happens when you
+    * write in the middle of an object instead of
+    * just the pointer dished out by malloc().
 */
 
+using namespace std;
+
+class Data
+{
+    public:
+        Data(ADDRINT addr, int numReads, int numWrites)
+        {
+            this->addr = addr;
+            this->numReads = numReads;
+            this->numWrites = numWrites;
+        }
+
+        ADDRINT addr;
+        int numReads, numWrites;
+};
+
+ostream& operator<<(ostream& os, const Data &data) 
+{
+    return os << hex << data.addr << ": " << dec << data.numReads << " Read(s), " << data.numWrites << " Write(s)";
+}
+
 static ADDRINT nextSize;
-std::unordered_map<ADDRINT, std::pair<int,int>> m;
+unordered_map<ADDRINT, pair<int,int>> live;
+vector<Data> total;
 static bool isAllocating;
-std::ofstream traceFile;
-KNOB<std::string> knobOutputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "my-profiler.out", "specify profiling file name");
+ofstream traceFile;
+KNOB<string> knobOutputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "my-profiler.out", "specify profiling file name");
 
 VOID MallocBefore(ADDRINT size) 
 {
@@ -41,11 +62,11 @@ VOID MallocBefore(ADDRINT size)
 
 VOID MallocAfter(ADDRINT ret) 
 {
-    std::pair<int,int> *p;
+    pair<int,int> *p;
     if (!isAllocating) 
     {
         isAllocating = true;
-        p = &(m[ret]);
+        p = &(live[ret]);
         isAllocating = false;
         p->first = 0;
         p->second = 0;
@@ -55,22 +76,27 @@ VOID MallocAfter(ADDRINT ret)
 
 VOID FreeHook(ADDRINT ptr) 
 {
+    pair<int,int> *p;
+    isAllocating = true;
+    p = &(live[ptr]);
+    total.emplace_back(ptr, p->first, p->second);
+    isAllocating = false;
     PDEBUG("free(%lx)\n", ptr);
 }
 
 VOID ReadsMem(ADDRINT memoryAddressRead, UINT32 memoryReadSize) 
 {
-    if (m.find(memoryAddressRead) != m.end()) 
+    if (live.find(memoryAddressRead) != live.end()) 
     {
-        m[memoryAddressRead].first++;
+        live[memoryAddressRead].first++;
         PDEBUG("Read %d bytes @ 0x%lx\n", memoryReadSize, memoryAddressRead);
     }
 }
 
 VOID WritesMem(ADDRINT memoryAddressWritten, UINT32 memoryWriteSize) {
-    if (m.find(memoryAddressWritten) != m.end()) 
+    if (live.find(memoryAddressWritten) != live.end()) 
     {
-        m[memoryAddressWritten].second++;
+        live[memoryAddressWritten].second++;
         PDEBUG("Wrote %d bytes @ 0x%lx\n", memoryWriteSize, memoryAddressWritten);
     }
 }
@@ -115,15 +141,21 @@ VOID Image(IMG img, VOID *v)
 
 VOID Fini(INT32 code, VOID *v) 
 {
-    for (auto it = m.begin(); it != m.end(); it++) 
+    traceFile << "LIVE OBJECTS" << endl;
+    for (auto it = live.begin(); it != live.end(); it++) 
     {
-        traceFile << std::hex << it->first << ": " << std::dec << it->second.first << " Reads, " << it->second.second << " Writes" << std::endl;
+        traceFile << hex << it->first << ": " << dec << it->second.first << " Read(s), " << it->second.second << " Write(s)" << endl;
+    }
+    traceFile << endl << "DEALLOCATED OBJECTS" << endl;
+    for (auto it = total.begin(); it != total.end(); it++) 
+    {
+        traceFile << *it << endl;
     }
 }
 
 INT32 Usage() 
 {
-    std::cerr << "This tool tracks the number of reads and writes to allocated heap objects." << std::endl;
+    cerr << "This tool tracks the number of reads and writes to allocated heap objects." << endl;
     return EXIT_FAILURE;
 }
 
@@ -136,7 +168,7 @@ int main(int argc, char *argv[])
     }
     isAllocating = false;
     traceFile.open(knobOutputFile.Value().c_str());
-    traceFile.setf(std::ios::showbase);
+    traceFile.setf(ios::showbase);
     IMG_AddInstrumentFunction(Image, 0);
     INS_AddInstrumentFunction(Instruction, 0);
     PIN_AddFiniFunction(Fini, 0);
