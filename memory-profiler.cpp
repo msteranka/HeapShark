@@ -1,6 +1,5 @@
 #include "pin.H"
 #include <unordered_map>
-#include <vector>
 #include <fstream>
 #include <iostream>
 #include <cstdio>
@@ -27,30 +26,38 @@
     * just the pointer dished out by malloc().
 */
 
+/*
+    * Consider storing data before allocated heap
+    * objects instead of storing everything in an
+    * unordered_map.
+*/
+
 using namespace std;
 
 class Data
 {
     public:
-        Data(ADDRINT addr, int numReads, int numWrites)
+        Data()
         {
-            this->addr = addr;
-            this->numReads = numReads;
-            this->numWrites = numWrites;
+            numAllocs = numReads = numWrites = 0;
         }
 
-        ADDRINT addr;
-        int numReads, numWrites;
+        int numAllocs, numReads, numWrites;
+        bool isLive; // isLive is necessary to not keep track of reads and writes internal to the allocator
 };
 
 ostream& operator<<(ostream& os, const Data &data) 
 {
-    return os << hex << data.addr << ": " << dec << data.numReads << " Read(s), " << data.numWrites << " Write(s)";
+    double avgReads = (double) data.numReads / data.numAllocs, avgWrites = (double) data.numWrites / data.numAllocs;
+    return os << "numAllocs: " << data.numAllocs << endl <<
+            "numReads: " << data.numReads << endl <<
+            "numWrites: " << data.numWrites << endl <<
+            "avgReads = " << avgReads << endl <<
+            "avgWrites = " << avgWrites;
 }
 
 static ADDRINT nextSize;
-unordered_map<ADDRINT, pair<int,int>> live;
-vector<Data> total;
+unordered_map<ADDRINT, Data> m;
 static bool isAllocating;
 ofstream traceFile;
 KNOB<string> knobOutputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "my-profiler.out", "specify profiling file name");
@@ -62,41 +69,46 @@ VOID MallocBefore(ADDRINT size)
 
 VOID MallocAfter(ADDRINT ret) 
 {
-    pair<int,int> *p;
+    unordered_map<ADDRINT, Data>::const_iterator it;
     if (!isAllocating) 
     {
         isAllocating = true;
-        p = &(live[ret]);
+        it = m.find(ret);
+        if (it == m.end())
+        {
+            it->second = Data();
+        }
         isAllocating = false;
-        p->first = 0;
-        p->second = 0;
+        it->second.numAllocs++;
+        it->second.isLive = true;
         PDEBUG("malloc(%ld) = %lx\n", nextSize, ret);
     }
 }
 
 VOID FreeHook(ADDRINT ptr) 
 {
-    pair<int,int> *p;
-    isAllocating = true;
-    p = &(live[ptr]);
-    total.emplace_back(ptr, p->first, p->second);
-    isAllocating = false;
+    unordered_map<ADDRINT, Data>::const_iterator it;
+    it = m.find(ptr);
+    if (it != m.end())
+    {
+        it->second.isLive = false;
+    }
     PDEBUG("free(%lx)\n", ptr);
 }
 
 VOID ReadsMem(ADDRINT memoryAddressRead, UINT32 memoryReadSize) 
 {
-    if (live.find(memoryAddressRead) != live.end()) 
+    if (m.find(memoryAddressRead) != m.end()) 
     {
-        live[memoryAddressRead].first++;
+        m[memoryAddressRead].numReads++;
         PDEBUG("Read %d bytes @ 0x%lx\n", memoryReadSize, memoryAddressRead);
     }
 }
 
 VOID WritesMem(ADDRINT memoryAddressWritten, UINT32 memoryWriteSize) {
-    if (live.find(memoryAddressWritten) != live.end()) 
+    if (m.find(memoryAddressWritten) != m.end()) 
     {
-        live[memoryAddressWritten].second++;
+        m[memoryAddressWritten].numWrites++;
         PDEBUG("Wrote %d bytes @ 0x%lx\n", memoryWriteSize, memoryAddressWritten);
     }
 }
@@ -141,15 +153,9 @@ VOID Image(IMG img, VOID *v)
 
 VOID Fini(INT32 code, VOID *v) 
 {
-    traceFile << "LIVE OBJECTS" << endl;
-    for (auto it = live.begin(); it != live.end(); it++) 
+    for (auto it = m.begin(); it != m.end(); it++) 
     {
-        traceFile << hex << it->first << ": " << dec << it->second.first << " Read(s), " << it->second.second << " Write(s)" << endl;
-    }
-    traceFile << endl << "DEALLOCATED OBJECTS" << endl;
-    for (auto it = total.begin(); it != total.end(); it++) 
-    {
-        traceFile << *it << endl;
+        traceFile << hex << it->first << ": " << endl << dec << it->second << endl;
     }
 }
 
