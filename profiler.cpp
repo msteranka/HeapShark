@@ -2,8 +2,10 @@
 #include <unordered_map>
 #include <fstream>
 #include <iostream>
+#include <utility>
 #include <cstdio>
 #include <cstdlib>
+// #include "hoardtlab.h" - HOARD
 
 #ifdef TARGET_MAC
 #define MALLOC "_malloc"
@@ -48,12 +50,14 @@ class Data
 
 ostream& operator<<(ostream& os, const Data &data) 
 {
-    double avgReads = (double) data.numReads / data.numAllocs, avgWrites = (double) data.numWrites / data.numAllocs;
+    double avgReads, avgWrites; 
+    avgReads = (double) data.numReads / data.numAllocs;
+    avgWrites = (double) data.numWrites / data.numAllocs;
     return os << "\tnumAllocs: " << data.numAllocs << endl <<
-            "\tnumReads: " << data.numReads << endl <<
-            "\tnumWrites: " << data.numWrites << endl <<
-            "\tavgReads = " << avgReads << endl <<
-            "\tavgWrites = " << avgWrites;
+                 "\tnumReads: " << data.numReads << endl <<
+                 "\tnumWrites: " << data.numWrites << endl <<
+                 "\tavgReads = " << avgReads << endl <<
+                 "\tavgWrites = " << avgWrites;
 }
 
 static ADDRINT nextSize;
@@ -62,6 +66,21 @@ static bool isAllocating;
 ofstream traceFile;
 KNOB<string> knobOutputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "my-profiler.out", "specify profiling file name");
 
+// TheCustomHeapType *getCustomHeap(); - HOARD
+
+// void *GetAddrStart(void *addr) - HOARD
+// {
+// 
+//     auto superblock = getCustomHeap()->getSuperblock(addr);
+//     size_t size = getCustomHeap()->getSize(addr), objSize;
+//     if (size == 0 || superblock == nullptr)
+//     {
+//         return nullptr;
+//     }
+//     objSize = superblock->getObjectSize();
+//     return (char *) addr - (objSize - size);
+// }
+
 VOID MallocBefore(ADDRINT size) 
 {
     nextSize = size;
@@ -69,17 +88,19 @@ VOID MallocBefore(ADDRINT size)
 
 VOID MallocAfter(ADDRINT ret) 
 {
+    unordered_map<ADDRINT, Data>::iterator it;
     if (!isAllocating) 
     {
         isAllocating = true;
-        if (m.find(ret) == m.end()) // TODO: make this more efficient, store an iterator instead of searching every time
+        it = m.find(ret);
+        if (it == m.end())
         {
-            m[ret] = Data();
+            it = m.insert(make_pair<ADDRINT,Data>(ret,Data())).first;
         }
-        m[ret].numAllocs++;
-        m[ret].isLive = true;
+        it->second.numAllocs++;
+        it->second.isLive = true;
         isAllocating = false;
-        PDEBUG("malloc(%ld) = %lx\n", nextSize, ret);
+        PDEBUG("malloc(%lu) = %lx\n", nextSize, ret);
     }
 }
 
@@ -137,7 +158,8 @@ VOID Instruction(INS ins, VOID *v)
 
 VOID Image(IMG img, VOID *v) 
 {
-    RTN mallocRtn = RTN_FindByName(img, MALLOC), freeRtn = RTN_FindByName(img, FREE);
+    RTN mallocRtn, freeRtn;
+    mallocRtn = RTN_FindByName(img, MALLOC);
     if (RTN_Valid(mallocRtn)) 
     {
         RTN_Open(mallocRtn);
@@ -145,6 +167,7 @@ VOID Image(IMG img, VOID *v)
         RTN_InsertCall(mallocRtn, IPOINT_AFTER, (AFUNPTR) MallocAfter, IARG_FUNCRET_EXITPOINT_VALUE, IARG_END);
         RTN_Close(mallocRtn);
     }
+    freeRtn = RTN_FindByName(img, FREE);
     if (RTN_Valid(freeRtn)) 
     {
         RTN_Open(freeRtn);
@@ -155,7 +178,8 @@ VOID Image(IMG img, VOID *v)
 
 VOID Fini(INT32 code, VOID *v) 
 {
-    for (auto it = m.begin(); it != m.end(); it++) 
+    unordered_map<ADDRINT,Data>::iterator it;
+    for (it = m.begin(); it != m.end(); it++) 
     {
         traceFile << hex << it->first << ": " << endl << dec << it->second << endl;
     }

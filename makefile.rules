@@ -1,0 +1,7 @@
+# Build rules to be appended to Pin/source/tools/ManualExamples/makefile.rules
+
+$(OBJDIR)MyProfiler$(OBJ_SUFFIX): MyProfiler.cpp
+	$(CXX) $(TOOL_CXXFLAGS) $(COMP_OBJ) $@ $<
+
+$(OBJDIR)MyProfiler$(PINTOOL_SUFFIX): $(OBJDIR)MyProfiler$(OBJ_SUFFIX)
+	$(LINKER) $(TOOL_LDFLAGS) $(LINK_EXE) $@ $< $(TOOL_LPATHS) $(TOOL_LIBS)
