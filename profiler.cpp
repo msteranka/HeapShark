@@ -41,23 +41,29 @@ class Data
     public:
         Data()
         {
-            numAllocs = numReads = numWrites = 0;
+            numAllocs = numReads = numWrites = bytesRead = bytesWritten = 0;
         }
 
-        int numAllocs, numReads, numWrites;
+        int numAllocs, numReads, numWrites, bytesRead, bytesWritten;
         bool isLive; // isLive is necessary to not keep track of reads and writes internal to the allocator
 };
 
 ostream& operator<<(ostream& os, const Data &data) 
 {
-    double avgReads, avgWrites; 
+    double avgReads, avgWrites, readFactor, writeFactor;
     avgReads = (double) data.numReads / data.numAllocs;
     avgWrites = (double) data.numWrites / data.numAllocs;
+    readFactor = (double) data.numReads / data.bytesRead;
+    writeFactor = (double) data.numWrites / data.bytesWritten;
     return os << "\tnumAllocs: " << data.numAllocs << endl <<
                  "\tnumReads: " << data.numReads << endl <<
                  "\tnumWrites: " << data.numWrites << endl <<
                  "\tavgReads = " << avgReads << endl <<
-                 "\tavgWrites = " << avgWrites;
+                 "\tavgWrites = " << avgWrites << endl <<
+                 "\tbytesRead = " << data.bytesRead << endl <<
+                 "\tbytesWritten = " << data.bytesWritten << endl <<
+                 "\tRead Factor = " << readFactor << endl <<
+                 "\tWrite Factor = " << writeFactor << endl;
 }
 
 static ADDRINT nextSize;
@@ -122,16 +128,19 @@ VOID ReadsMem(ADDRINT memoryAddressRead, UINT32 memoryReadSize)
     if (it != m.end() && it->second.isLive) 
     {
         it->second.numReads++;
+        it->second.bytesRead += memoryReadSize;
         PDEBUG("Read %d bytes @ 0x%lx\n", memoryReadSize, memoryAddressRead);
     }
 }
 
-VOID WritesMem(ADDRINT memoryAddressWritten, UINT32 memoryWriteSize) {
+VOID WritesMem(ADDRINT memoryAddressWritten, UINT32 memoryWriteSize) 
+{
     unordered_map<ADDRINT, Data>::iterator it;
     it = m.find(memoryAddressWritten);
     if (it != m.end() && it->second.isLive) 
     {
         it->second.numWrites++;
+        it->second.bytesWritten += memoryWriteSize;
         PDEBUG("Wrote %d bytes @ 0x%lx\n", memoryWriteSize, memoryAddressWritten);
     }
 }
