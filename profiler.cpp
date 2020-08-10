@@ -15,18 +15,11 @@
 #define FREE "free"
 #endif // TARGET_MAC
 
-#define PROF_DEBUG
 #ifdef PROF_DEBUG
 #define PDEBUG(fmt, args...) fprintf(stderr, fmt, ## args)
 #else
 #define PDEBUG(fmt, args...)
 #endif // PROF_DEBUG
-
-/*
-    * Take into consideration what happens when you
-    * write in the middle of an object instead of
-    * just the pointer dished out by malloc().
-*/
 
 /*
     * Consider storing data before allocated heap
@@ -74,7 +67,7 @@ KNOB<string> knobOutputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "my-profiler.ou
 
 // TheCustomHeapType *getCustomHeap(); - HOARD
 
-// void *GetAddrStart(void *addr) - HOARD
+// ADDRINT GetObjStart(ADDRINT addr) - HOARD
 // {
 // 
 //     auto superblock = getCustomHeap()->getSuperblock(addr);
@@ -113,7 +106,9 @@ VOID MallocAfter(ADDRINT ret)
 VOID FreeHook(ADDRINT ptr) 
 {
     unordered_map<ADDRINT, Data>::iterator it;
+    isAllocating = true;
     it = m.find(ptr);
+    isAllocating = false;
     if (it != m.end())
     {
         it->second.isLive = false;
@@ -123,8 +118,17 @@ VOID FreeHook(ADDRINT ptr)
 
 VOID ReadsMem(ADDRINT memoryAddressRead, UINT32 memoryReadSize) 
 {
+    // ADDRINT objStart;
     unordered_map<ADDRINT, Data>::iterator it;
+    // objStart = getObjStart(memoryAddressRead);
+    // if (objStart == nullptr)
+    // {
+    //     return;
+    // }
+    // it = m.find(objStart);
+    isAllocating = true;
     it = m.find(memoryAddressRead);
+    isAllocating = false;
     if (it != m.end() && it->second.isLive) 
     {
         it->second.numReads++;
@@ -135,8 +139,17 @@ VOID ReadsMem(ADDRINT memoryAddressRead, UINT32 memoryReadSize)
 
 VOID WritesMem(ADDRINT memoryAddressWritten, UINT32 memoryWriteSize) 
 {
+    // ADDRINT objStart;
     unordered_map<ADDRINT, Data>::iterator it;
+    // objStart = getObjStart(memoryAddressWritten);
+    // if (objStart == nullptr)
+    // {
+    //     return;
+    // }
+    // it = m.find(objStart);
+    isAllocating = true;
     it = m.find(memoryAddressWritten);
+    isAllocating = false;
     if (it != m.end() && it->second.isLive) 
     {
         it->second.numWrites++;
@@ -162,7 +175,6 @@ VOID Instruction(INS ins, VOID *v)
                         IARG_MEMORYWRITE_SIZE,
                         IARG_END);
     }
-
 }
 
 VOID Image(IMG img, VOID *v) 
