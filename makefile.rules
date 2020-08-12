@@ -1,7 +1,7 @@
 # Build rules to be appended to Pin/source/tools/ManualExamples/makefile.rules
 
 $(OBJDIR)profiler$(OBJ_SUFFIX): profiler.cpp
-	$(CXX) $(TOOL_CXXFLAGS) $(COMP_OBJ) $@ $<
+	$(CXX) $(TOOL_CXXFLAGS) -DPROF_DEBUG $(COMP_OBJ) $@ $<
 
 $(OBJDIR)profiler$(PINTOOL_SUFFIX): $(OBJDIR)profiler$(OBJ_SUFFIX)
-	$(LINKER) $(TOOL_LDFLAGS) $(LINK_EXE) $@ $< $(TOOL_LPATHS) $(TOOL_LIBS)
+	$(LINKER) $(TOOL_LDFLAGS) -DPROF_DEBUG $(LINK_EXE) $@ $< $(TOOL_LPATHS) $(TOOL_LIBS)

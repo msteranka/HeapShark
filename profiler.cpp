@@ -5,7 +5,6 @@
 #include <utility>
 #include <cstdio>
 #include <cstdlib>
-// #include "hoardtlab.h" - HOARD
 
 #ifdef TARGET_MAC
 #define MALLOC "_malloc"
@@ -21,22 +20,18 @@
 #define PDEBUG(fmt, args...)
 #endif // PROF_DEBUG
 
-/*
-    * Consider storing data before allocated heap
-    * objects instead of storing everything in an
-    * unordered_map.
-*/
-
 using namespace std;
 
 class Data
 {
     public:
-        Data()
+        Data(ADDRINT base)
         {
+            this->base = base;
             numAllocs = numReads = numWrites = bytesRead = bytesWritten = 0;
         }
 
+        ADDRINT base;
         int numAllocs, numReads, numWrites, bytesRead, bytesWritten;
         bool isLive; // isLive is necessary to not keep track of reads and writes internal to the allocator
 };
@@ -48,7 +43,8 @@ ostream& operator<<(ostream& os, const Data &data)
     avgWrites = (double) data.numWrites / data.numAllocs;
     readFactor = (double) data.numReads / data.bytesRead;
     writeFactor = (double) data.numWrites / data.bytesWritten;
-    return os << "\tnumAllocs: " << data.numAllocs << endl <<
+    return os << "malloc(" << hex << data.base << "):" << dec << endl <<
+                 "\tnumAllocs: " << data.numAllocs << endl <<
                  "\tnumReads: " << data.numReads << endl <<
                  "\tnumWrites: " << data.numWrites << endl <<
                  "\tavgReads = " << avgReads << endl <<
@@ -60,25 +56,10 @@ ostream& operator<<(ostream& os, const Data &data)
 }
 
 static ADDRINT nextSize;
-unordered_map<ADDRINT, Data> m;
+unordered_map<ADDRINT, Data*> m;
 static bool isAllocating;
 ofstream traceFile;
 KNOB<string> knobOutputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "my-profiler.out", "specify profiling file name");
-
-// TheCustomHeapType *getCustomHeap(); - HOARD
-
-// ADDRINT GetObjStart(ADDRINT addr) - HOARD
-// {
-// 
-//     auto superblock = getCustomHeap()->getSuperblock(addr);
-//     size_t size = getCustomHeap()->getSize(addr), objSize;
-//     if (size == 0 || superblock == nullptr)
-//     {
-//         return nullptr;
-//     }
-//     objSize = superblock->getObjectSize();
-//     return (char *) addr - (objSize - size);
-// }
 
 VOID MallocBefore(ADDRINT size) 
 {
@@ -87,73 +68,68 @@ VOID MallocBefore(ADDRINT size)
 
 VOID MallocAfter(ADDRINT ret) 
 {
-    unordered_map<ADDRINT, Data>::iterator it;
-    if (!isAllocating) 
+    unordered_map<ADDRINT, Data*>::iterator it;
+    Data *d;
+    ADDRINT nextAddr;
+    if (isAllocating)
     {
-        isAllocating = true;
-        it = m.find(ret);
-        if (it == m.end())
-        {
-            it = m.insert(make_pair<ADDRINT,Data>(ret,Data())).first;
-        }
-        it->second.numAllocs++;
-        it->second.isLive = true;
-        isAllocating = false;
-        PDEBUG("malloc(%lu) = %lx\n", nextSize, ret);
+        return;
     }
+    isAllocating = true;
+    it = m.find(ret);
+    if (it == m.end())
+    {
+        d = new Data(ret);
+        for (ADDRINT i = 0; i < nextSize; i++)
+        {
+            nextAddr = (ADDRINT) ((char *) ret + i);
+            m.insert(make_pair<ADDRINT,Data*>(nextAddr, d));
+        }
+        it = m.find(ret);
+    }
+    it->second->numAllocs++;
+    it->second->isLive = true;
+    isAllocating = false;
+    PDEBUG("malloc(%lu) = %lx\n", nextSize, ret);
 }
 
 VOID FreeHook(ADDRINT ptr) 
 {
-    unordered_map<ADDRINT, Data>::iterator it;
+    unordered_map<ADDRINT, Data*>::iterator it;
     isAllocating = true;
     it = m.find(ptr);
     isAllocating = false;
     if (it != m.end())
     {
-        it->second.isLive = false;
+        it->second->isLive = false;
     }
     PDEBUG("free(%lx)\n", ptr);
 }
 
 VOID ReadsMem(ADDRINT memoryAddressRead, UINT32 memoryReadSize) 
 {
-    // ADDRINT objStart;
-    unordered_map<ADDRINT, Data>::iterator it;
-    // objStart = getObjStart(memoryAddressRead);
-    // if (objStart == nullptr)
-    // {
-    //     return;
-    // }
-    // it = m.find(objStart);
+    unordered_map<ADDRINT, Data*>::iterator it;
     isAllocating = true;
     it = m.find(memoryAddressRead);
     isAllocating = false;
-    if (it != m.end() && it->second.isLive) 
+    if (it != m.end() && it->second->isLive) 
     {
-        it->second.numReads++;
-        it->second.bytesRead += memoryReadSize;
+        it->second->numReads++;
+        it->second->bytesRead += memoryReadSize;
         PDEBUG("Read %d bytes @ 0x%lx\n", memoryReadSize, memoryAddressRead);
     }
 }
 
 VOID WritesMem(ADDRINT memoryAddressWritten, UINT32 memoryWriteSize) 
 {
-    // ADDRINT objStart;
-    unordered_map<ADDRINT, Data>::iterator it;
-    // objStart = getObjStart(memoryAddressWritten);
-    // if (objStart == nullptr)
-    // {
-    //     return;
-    // }
-    // it = m.find(objStart);
+    unordered_map<ADDRINT, Data*>::iterator it;
     isAllocating = true;
     it = m.find(memoryAddressWritten);
     isAllocating = false;
-    if (it != m.end() && it->second.isLive) 
+    if (it != m.end() && it->second->isLive) 
     {
-        it->second.numWrites++;
-        it->second.bytesWritten += memoryWriteSize;
+        it->second->numWrites++;
+        it->second->bytesWritten += memoryWriteSize;
         PDEBUG("Wrote %d bytes @ 0x%lx\n", memoryWriteSize, memoryAddressWritten);
     }
 }
@@ -181,6 +157,8 @@ VOID Image(IMG img, VOID *v)
 {
     RTN mallocRtn, freeRtn;
     mallocRtn = RTN_FindByName(img, MALLOC);
+    freeRtn = RTN_FindByName(img, FREE);
+
     if (RTN_Valid(mallocRtn)) 
     {
         RTN_Open(mallocRtn);
@@ -188,7 +166,7 @@ VOID Image(IMG img, VOID *v)
         RTN_InsertCall(mallocRtn, IPOINT_AFTER, (AFUNPTR) MallocAfter, IARG_FUNCRET_EXITPOINT_VALUE, IARG_END);
         RTN_Close(mallocRtn);
     }
-    freeRtn = RTN_FindByName(img, FREE);
+
     if (RTN_Valid(freeRtn)) 
     {
         RTN_Open(freeRtn);
@@ -199,11 +177,19 @@ VOID Image(IMG img, VOID *v)
 
 VOID Fini(INT32 code, VOID *v) 
 {
-    unordered_map<ADDRINT,Data>::iterator it;
-    for (it = m.begin(); it != m.end(); it++) 
+    isAllocating = true;
+    unordered_map<ADDRINT,Data*> seen;
+    unordered_map<ADDRINT,Data*>::iterator mIter, seenIter;
+    for (mIter = m.begin(); mIter != m.end(); mIter++) 
     {
-        traceFile << hex << it->first << ": " << endl << dec << it->second << endl;
+        seenIter = seen.find(mIter->second->base);
+        if (seenIter == seen.end())
+        {
+            traceFile << *(mIter->second) << endl;
+            seen.insert(make_pair<ADDRINT,Data*>(mIter->second->base, mIter->second));
+        }
     }
+    isAllocating = false;
 }
 
 INT32 Usage() 
@@ -212,7 +198,7 @@ INT32 Usage()
     return EXIT_FAILURE;
 }
 
-int main(int argc, char *argv[]) 
+int main(INT32 argc, CHAR *argv[]) 
 {
     PIN_InitSymbols();
     if (PIN_Init(argc, argv)) 
