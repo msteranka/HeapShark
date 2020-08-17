@@ -35,7 +35,7 @@ class Data
             this->size = size;
             readBuf = (char *) calloc(size, 1);
             writeBuf = (char *) calloc(size, 1);
-            numAllocs = numReads = numWrites = bytesRead = bytesWritten = 0;
+            numAllocs = numFrees = numReads = numWrites = bytesRead = bytesWritten = 0;
             minCoverage.first = minCoverage.second = 1;
         }
 
@@ -59,7 +59,7 @@ class Data
         ADDRINT base;
         char *readBuf, *writeBuf;
         size_t size;
-        int numAllocs, numReads, numWrites, bytesRead, bytesWritten;
+        int numAllocs, numFrees, numReads, numWrites, bytesRead, bytesWritten;
         pair<double,double> minCoverage;
         bool isLive; // isLive is necessary to not keep track of reads and writes internal to the allocator
 };
@@ -67,12 +67,15 @@ class Data
 ostream& operator<<(ostream& os, Data &data) 
 {
     double avgReads, avgWrites, readFactor, writeFactor;
+    pair<double,double> coverage;
     avgReads = (double) data.numReads / data.numAllocs;
     avgWrites = (double) data.numWrites / data.numAllocs;
     readFactor = (double) data.numReads / data.bytesRead;
     writeFactor = (double) data.numWrites / data.bytesWritten;
+    coverage = data.GetCoverage();
     return os << "malloc(" << hex << data.base << "):" << dec << endl <<
                  "\tnumAllocs: " << data.numAllocs << endl <<
+                 "\tnumFrees: " << data.numFrees << endl <<
                  "\tnumReads: " << data.numReads << endl <<
                  "\tnumWrites: " << data.numWrites << endl <<
                  "\tavgReads = " << avgReads << endl <<
@@ -81,8 +84,8 @@ ostream& operator<<(ostream& os, Data &data)
                  "\tbytesWritten = " << data.bytesWritten << endl <<
                  "\tRead Factor = " << readFactor << endl <<
                  "\tWrite Factor = " << writeFactor << endl <<
-                 "\tMin Read Coverage = " << data.minCoverage.first << endl << 
-                 "\tMin Write Coverage = " << data.minCoverage.second << endl;
+                 "\tMin Read Coverage = " << min(data.minCoverage.first, coverage.first) << endl << 
+                 "\tMin Write Coverage = " << min(data.minCoverage.second, coverage.second) << endl;
 }
 
 static ADDRINT nextSize;
@@ -138,6 +141,7 @@ VOID FreeHook(ADDRINT ptr)
         coverage = it->second->GetCoverage();
         it->second->minCoverage.first = min(coverage.first, it->second->minCoverage.first);
         it->second->minCoverage.second = min(coverage.second, it->second->minCoverage.second);
+        it->second->numFrees++;
     }
     isAllocating = false;
     PDEBUG("free(%lx)\n", ptr);
