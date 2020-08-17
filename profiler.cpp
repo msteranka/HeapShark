@@ -20,29 +20,57 @@
 #define PDEBUG(fmt, args...)
 #endif // PROF_DEBUG
 
+#define FILLER 'a'
+
+// NOTE: coverage can be misleading on structs/classes that require extra space for alignment
+
 using namespace std;
 
 class Data
 {
     public:
-        Data(ADDRINT base)
+        Data(ADDRINT base, size_t size)
         {
             this->base = base;
+            this->size = size;
+            readBuf = (char *) calloc(size, 1);
+            writeBuf = (char *) calloc(size, 1);
             numAllocs = numReads = numWrites = bytesRead = bytesWritten = 0;
         }
 
+        pair<double,double> GetCoverage()
+        {
+            int read = 0, written = 0;
+            for (size_t i = 0; i < size; i++)
+            {
+                if (readBuf[i] == FILLER)
+                {
+                    read++;
+                }
+                if (writeBuf[i] == FILLER)
+                {
+                    written++;
+                }
+            }
+            return make_pair<double,double>((double) read / size, (double) written / size);
+        }
+
         ADDRINT base;
+        char *readBuf, *writeBuf;
+        size_t size;
         int numAllocs, numReads, numWrites, bytesRead, bytesWritten;
         bool isLive; // isLive is necessary to not keep track of reads and writes internal to the allocator
 };
 
-ostream& operator<<(ostream& os, const Data &data) 
+ostream& operator<<(ostream& os, Data &data) 
 {
     double avgReads, avgWrites, readFactor, writeFactor;
+    pair<double,double> coverage;
     avgReads = (double) data.numReads / data.numAllocs;
     avgWrites = (double) data.numWrites / data.numAllocs;
     readFactor = (double) data.numReads / data.bytesRead;
     writeFactor = (double) data.numWrites / data.bytesWritten;
+    coverage = data.GetCoverage();
     return os << "malloc(" << hex << data.base << "):" << dec << endl <<
                  "\tnumAllocs: " << data.numAllocs << endl <<
                  "\tnumReads: " << data.numReads << endl <<
@@ -52,7 +80,9 @@ ostream& operator<<(ostream& os, const Data &data)
                  "\tbytesRead = " << data.bytesRead << endl <<
                  "\tbytesWritten = " << data.bytesWritten << endl <<
                  "\tRead Factor = " << readFactor << endl <<
-                 "\tWrite Factor = " << writeFactor << endl;
+                 "\tWrite Factor = " << writeFactor << endl <<
+                 "\tRead Coverage = " << coverage.first << endl << 
+                 "\tWrite Coverage = " << coverage.second << endl;
 }
 
 static ADDRINT nextSize;
@@ -79,7 +109,7 @@ VOID MallocAfter(ADDRINT ret)
     it = m.find(ret);
     if (it == m.end())
     {
-        d = new Data(ret);
+        d = new Data(ret, nextSize);
         for (ADDRINT i = 0; i < nextSize; i++)
         {
             nextAddr = (ADDRINT) ((char *) ret + i);
@@ -93,6 +123,7 @@ VOID MallocAfter(ADDRINT ret)
     PDEBUG("malloc(%lu) = %lx\n", nextSize, ret);
 }
 
+// TODO: reuse with coverage
 VOID FreeHook(ADDRINT ptr) 
 {
     unordered_map<ADDRINT, Data*>::iterator it;
@@ -109,6 +140,7 @@ VOID FreeHook(ADDRINT ptr)
 VOID ReadsMem(ADDRINT memoryAddressRead, UINT32 memoryReadSize) 
 {
     unordered_map<ADDRINT, Data*>::iterator it;
+    char *start;
     isAllocating = true;
     it = m.find(memoryAddressRead);
     isAllocating = false;
@@ -116,6 +148,8 @@ VOID ReadsMem(ADDRINT memoryAddressRead, UINT32 memoryReadSize)
     {
         it->second->numReads++;
         it->second->bytesRead += memoryReadSize;
+        start = (char *) it->second->readBuf + (memoryAddressRead - it->second->base);
+        memset(start, FILLER, memoryReadSize);
         PDEBUG("Read %d bytes @ 0x%lx\n", memoryReadSize, memoryAddressRead);
     }
 }
@@ -123,6 +157,7 @@ VOID ReadsMem(ADDRINT memoryAddressRead, UINT32 memoryReadSize)
 VOID WritesMem(ADDRINT memoryAddressWritten, UINT32 memoryWriteSize) 
 {
     unordered_map<ADDRINT, Data*>::iterator it;
+    char *start;
     isAllocating = true;
     it = m.find(memoryAddressWritten);
     isAllocating = false;
@@ -130,6 +165,8 @@ VOID WritesMem(ADDRINT memoryAddressWritten, UINT32 memoryWriteSize)
     {
         it->second->numWrites++;
         it->second->bytesWritten += memoryWriteSize;
+        start = (char *) it->second->writeBuf + (memoryAddressWritten - it->second->base);
+        memset(start, FILLER, memoryWriteSize);
         PDEBUG("Wrote %d bytes @ 0x%lx\n", memoryWriteSize, memoryAddressWritten);
     }
 }
