@@ -36,6 +36,7 @@ class Data
             readBuf = (char *) calloc(size, 1);
             writeBuf = (char *) calloc(size, 1);
             numAllocs = numReads = numWrites = bytesRead = bytesWritten = 0;
+            minCoverage.first = minCoverage.second = 1;
         }
 
         pair<double,double> GetCoverage()
@@ -59,18 +60,17 @@ class Data
         char *readBuf, *writeBuf;
         size_t size;
         int numAllocs, numReads, numWrites, bytesRead, bytesWritten;
+        pair<double,double> minCoverage;
         bool isLive; // isLive is necessary to not keep track of reads and writes internal to the allocator
 };
 
 ostream& operator<<(ostream& os, Data &data) 
 {
     double avgReads, avgWrites, readFactor, writeFactor;
-    pair<double,double> coverage;
     avgReads = (double) data.numReads / data.numAllocs;
     avgWrites = (double) data.numWrites / data.numAllocs;
     readFactor = (double) data.numReads / data.bytesRead;
     writeFactor = (double) data.numWrites / data.bytesWritten;
-    coverage = data.GetCoverage();
     return os << "malloc(" << hex << data.base << "):" << dec << endl <<
                  "\tnumAllocs: " << data.numAllocs << endl <<
                  "\tnumReads: " << data.numReads << endl <<
@@ -81,8 +81,8 @@ ostream& operator<<(ostream& os, Data &data)
                  "\tbytesWritten = " << data.bytesWritten << endl <<
                  "\tRead Factor = " << readFactor << endl <<
                  "\tWrite Factor = " << writeFactor << endl <<
-                 "\tRead Coverage = " << coverage.first << endl << 
-                 "\tWrite Coverage = " << coverage.second << endl;
+                 "\tMin Read Coverage = " << data.minCoverage.first << endl << 
+                 "\tMin Write Coverage = " << data.minCoverage.second << endl;
 }
 
 static ADDRINT nextSize;
@@ -119,21 +119,27 @@ VOID MallocAfter(ADDRINT ret)
     }
     it->second->numAllocs++;
     it->second->isLive = true;
+    it->second->size = nextSize;
+    memset(it->second->readBuf, 0, nextSize);
+    memset(it->second->writeBuf, 0, nextSize);
     isAllocating = false;
     PDEBUG("malloc(%lu) = %lx\n", nextSize, ret);
 }
 
-// TODO: reuse with coverage
 VOID FreeHook(ADDRINT ptr) 
 {
     unordered_map<ADDRINT, Data*>::iterator it;
+    pair<double,double> coverage;
     isAllocating = true;
     it = m.find(ptr);
-    isAllocating = false;
     if (it != m.end())
     {
         it->second->isLive = false;
+        coverage = it->second->GetCoverage();
+        it->second->minCoverage.first = min(coverage.first, it->second->minCoverage.first);
+        it->second->minCoverage.second = min(coverage.second, it->second->minCoverage.second);
     }
+    isAllocating = false;
     PDEBUG("free(%lx)\n", ptr);
 }
 
