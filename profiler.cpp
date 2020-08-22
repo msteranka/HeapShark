@@ -78,7 +78,7 @@ class ObjectData
 
 ostream& operator<<(ostream& os, ObjectData &data) 
 {
-    return os << "malloc(" << hex << data.addr << "):" << dec << endl <<
+    return os << hex << data.addr << dec << ":" << endl <<
                  "\tnumReads: " << data.numReads << endl <<
                  "\tnumWrites: " << data.numWrites << endl <<
                  "\tbytesRead = " << data.bytesRead << endl <<
@@ -91,10 +91,10 @@ ostream& operator<<(ostream& os, ObjectData &data)
 
 static ADDRINT nextSize;
 unordered_map<ADDRINT,ObjectData*> m;
-unordered_map<ADDRINT, vector<ObjectData*>> totalObjects;
+unordered_map<size_t, vector<ObjectData*>> totalObjects;
 static bool isAllocating; // If isAllocating is true, then an allocation internal to the profiler is taking place
 ofstream traceFile;
-KNOB<string> knobOutputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "my-profiler.out", "specify profiling file name");
+KNOB<string> knobOutputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "profiler.out", "specify profiling file name");
 
 VOID MallocBefore(ADDRINT size) 
 {
@@ -135,10 +135,11 @@ VOID FreeHook(ADDRINT ptr)
     }
     d = it->second;
     d->Freeze();
-    totalObjects[d->addr].push_back(d);
+    totalObjects[d->size].push_back(d);
     start = d->addr;
     end = start + d->size;
-    while (start != end) { // Must erase all pointers to the same ObjectData
+    while (start != end) // Must erase all pointers to the same ObjectData
+    {
         m.erase(start++);
     }
     isAllocating = false;
@@ -225,22 +226,24 @@ VOID Fini(INT32 code, VOID *v)
     isAllocating = true;
     unordered_map<ADDRINT,ObjectData*> seen;
     unordered_map<ADDRINT,ObjectData*>::iterator mIter, seenIter;
-    unordered_map<ADDRINT,vector<ObjectData*>>::iterator totalObjectsIter;
+    unordered_map<size_t,vector<ObjectData*>>::iterator totalObjectsIter;
     vector<ObjectData*> *curAddrs;
     vector<ObjectData*>::iterator curAddrsIter;
 
-    for (mIter = m.begin(); mIter != m.end(); mIter++) // Print out objects that were never freed
+    for (mIter = m.begin(); mIter != m.end(); mIter++) // Move objects that were never freed to totalObjects
     {
         seenIter = seen.find(mIter->second->addr);
         if (seenIter == seen.end())
         {
-            traceFile << *(mIter->second) << endl;
             seen.insert(make_pair<ADDRINT,ObjectData*>(mIter->second->addr, mIter->second));
+            mIter->second->Freeze();
+            totalObjects[mIter->second->size].push_back(mIter->second);
         }
     }
-    for (totalObjectsIter = totalObjects.begin(); totalObjectsIter != totalObjects.end(); totalObjectsIter++) // Print out objects that were freed
+    for (totalObjectsIter = totalObjects.begin(); totalObjectsIter != totalObjects.end(); totalObjectsIter++) // Print out all object data
     {
         curAddrs = &(totalObjectsIter->second);
+        traceFile << "malloc(" << totalObjectsIter->first << ")" << endl << "----------------------------------------" << endl;
         for (curAddrsIter = curAddrs->begin(); curAddrsIter != curAddrs->end(); curAddrsIter++)
         {
             traceFile << **curAddrsIter << endl;
