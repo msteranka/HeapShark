@@ -23,26 +23,29 @@
 
 #define FILLER 'a'
 
-// NOTE: coverage can be misleading on structs/classes that require extra space for alignment
-
 using namespace std;
 
 class ObjectData
 {
     public:
-        ObjectData(ADDRINT addr, size_t size)
+        ObjectData(ADDRINT addr, UINT32 size)
         {
             this->addr = addr;
             this->size = size;
             numReads = numWrites = bytesRead = bytesWritten = 0;
-            readBuf = (char *) calloc(size, 1);
-            writeBuf = (char *) calloc(size, 1);
+            readBuf = (CHAR *) calloc(size, 1);
+            writeBuf = (CHAR *) calloc(size, 1);
         }
 
-        void Freeze()
+        VOID Freeze()
         {
-            int read = 0, written = 0;
-            for (int i = 0; i < (int) size; i++) // Calculate read and write coverage
+            UINT32 read = 0, written = 0;
+
+            // Calculate read and write coverage
+            // NOTE: coverage can be misleading on structs/classes that require extra space for alignment
+            //
+            for (UINT32 i = 0; i < size; i++)
+
             {
                 if (readBuf[i] == FILLER)
                 {
@@ -70,10 +73,9 @@ class ObjectData
         }
 
         ADDRINT addr;
-        size_t size;
-        int numReads, numWrites, bytesRead, bytesWritten;
+        UINT32 size, numReads, numWrites, bytesRead, bytesWritten;
         double readCoverage, writeCoverage;
-        char *readBuf, *writeBuf;
+        CHAR *readBuf, *writeBuf;
 };
 
 ostream& operator<<(ostream& os, ObjectData &data) 
@@ -89,102 +91,110 @@ ostream& operator<<(ostream& os, ObjectData &data)
                  "\tWrite Coverage = " << data.writeCoverage << endl;
 }
 
-static ADDRINT nextSize;
-unordered_map<ADDRINT,ObjectData*> m;
+ADDRINT nextSize;
+unordered_map<ADDRINT,ObjectData*> liveObjects;
 unordered_map<size_t, vector<ObjectData*>> totalObjects;
-static bool isAllocating; // If isAllocating is true, then an allocation internal to the profiler is taking place
 ofstream traceFile;
 KNOB<string> knobOutputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "profiler.out", "specify profiling file name");
 
-VOID MallocBefore(ADDRINT size) 
+VOID MallocBefore(ADDRINT size)
 {
     nextSize = size;
 }
 
-VOID MallocAfter(ADDRINT ret) 
+VOID MallocAfter(ADDRINT retVal)
 {
     ObjectData *d;
     ADDRINT nextAddr;
 
-    if (isAllocating || (void *) ret == nullptr) // If this allocation is internal to the profiler or the allocation failed, then skip this routine
+    if ((VOID *) retVal == nullptr) // Check for success since we don't want to track null pointers
     {
         return;
     }
-    isAllocating = true;
-    d = new ObjectData(ret, nextSize);
-    for (ADDRINT i = 0; i < nextSize; i++)
+
+    d = new ObjectData(retVal, nextSize); // We don't need to worry about recursive malloc calls since Pin doesn't instrument the PinTool itself
+    for (UINT32 i = 0; i < nextSize; i++)
     {
-        nextAddr = (ADDRINT) ((char *) ret + i);
-        m.insert(make_pair<ADDRINT,ObjectData*>(nextAddr, d)); // Create a mapping from every address in this object's range to the same Data structure
+        nextAddr = (retVal + i);
+        liveObjects.insert(make_pair<ADDRINT,ObjectData*>(nextAddr, d)); // Create a mapping from every address in this object's range to the same ObjectData
     }
-    isAllocating = false;
-    PDEBUG("malloc(%lu) = 0x%lx\n", nextSize, ret);
+
+    PDEBUG("malloc(%u) = %p\n", (UINT32) nextSize, (VOID *) retVal);
 }
 
 VOID FreeHook(ADDRINT ptr) 
 {
     unordered_map<ADDRINT,ObjectData*>::iterator it;
     ObjectData *d;
-    ADDRINT start, end;
-    isAllocating = true;
-    it = m.find(ptr);
-    if (it == m.end()) // If this is an invalid/double/internal free, then skip this routine
+    ADDRINT startAddr, endAddr;
+
+    it = liveObjects.find(ptr);
+    if (it == liveObjects.end()) // If this is an invalid/double free, then skip this routine (provided that the allocator doesn't already kill the process)
     {
-        isAllocating = false;
         return;
     }
+
     d = it->second;
-    d->Freeze();
-    totalObjects[d->size].push_back(d);
-    start = d->addr;
-    end = start + d->size;
-    while (start != end) // Must erase all pointers to the same ObjectData
+    d->Freeze(); // Clean up the corresponding ObjectData, but keep its contents
+    totalObjects[d->size].push_back(d); // Insert the ObjectData into totalObjects
+
+    startAddr = d->addr;
+    endAddr = startAddr + d->size;
+    while (startAddr != endAddr)
     {
-        m.erase(start++);
+        liveObjects.erase(startAddr++); // Remove all mappings corresponding to this object
     }
-    isAllocating = false;
-    PDEBUG("free(0x%lx)\n", ptr);
+
+    PDEBUG("free(%p)\n", (VOID *) ptr);
 }
 
-VOID ReadsMem(ADDRINT memoryAddressRead, UINT32 memoryReadSize) 
+VOID ReadsMem(ADDRINT addrRead, UINT32 readSize) 
 {
     unordered_map<ADDRINT,ObjectData*>::iterator it;
-    char *start;
-    isAllocating = true;
-    it = m.find(memoryAddressRead);
-    isAllocating = false;
-    if (it != m.end()) 
+    ObjectData *d;
+    VOID *fillAddr;
+
+    it = liveObjects.find(addrRead);
+    if (it == liveObjects.end()) // If this is not an object returned by malloc, then skip this routine
     {
-        it->second->numReads++;
-        it->second->bytesRead += memoryReadSize;
-        start = (char *) it->second->readBuf + (memoryAddressRead - it->second->addr);
-        memset(start, FILLER, memoryReadSize); // Write into readBuf the same offset the object is being read from
-        PDEBUG("Read %d bytes @ 0x%lx\n", memoryReadSize, memoryAddressRead);
+        return;
     }
+
+    d = it->second;
+    d->numReads++;
+    d->bytesRead += readSize;
+    fillAddr = d->readBuf + (addrRead - d->addr);
+    memset(fillAddr, FILLER, readSize); // Write to readBuf at the same offset the object is being read from
+
+    PDEBUG("Read %d bytes @ %p\n", readSize, (VOID *) addrRead);
 }
 
-VOID WritesMem(ADDRINT memoryAddressWritten, UINT32 memoryWriteSize) 
+VOID WritesMem(ADDRINT addrWritten, UINT32 writeSize) 
 {
     unordered_map<ADDRINT,ObjectData*>::iterator it;
-    char *start;
-    isAllocating = true;
-    it = m.find(memoryAddressWritten);
-    isAllocating = false;
-    if (it != m.end()) 
+    ObjectData *d;
+    VOID *fillAddr;
+
+    it = liveObjects.find(addrWritten);
+    if (it == liveObjects.end()) // If this is not an object returned by malloc, then skip this routine
     {
-        it->second->numWrites++;
-        it->second->bytesWritten += memoryWriteSize;
-        start = (char *) it->second->writeBuf + (memoryAddressWritten - it->second->addr);
-        memset(start, FILLER, memoryWriteSize); // Write into writeBuf the same offset the object is being written to
-        PDEBUG("Wrote %d bytes @ 0x%lx\n", memoryWriteSize, memoryAddressWritten);
+        return;
     }
+
+    d = it->second;
+    d->numWrites++;
+    d->bytesWritten += writeSize;
+    fillAddr = d->writeBuf + (addrWritten - d->addr);
+    memset(fillAddr, FILLER, writeSize); // Write to writeBuf at the same offset the object is being written to
+
+    PDEBUG("Wrote %d bytes @ %p\n", writeSize, (VOID *) addrWritten);
 }
 
 VOID Instruction(INS ins, VOID *v) 
 {
     if (INS_IsMemoryRead(ins)) 
     {
-        INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR) ReadsMem,
+        INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR) ReadsMem, // Intercept all read instructions with ReadsMem
                         IARG_MEMORYREAD_EA,
                         IARG_MEMORYREAD_SIZE,
                         IARG_END);
@@ -192,7 +202,7 @@ VOID Instruction(INS ins, VOID *v)
 
     if (INS_IsMemoryWrite(ins)) 
     {
-        INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR) WritesMem,
+        INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR) WritesMem, // Intercept all write instructions with WritesMem
                         IARG_MEMORYWRITE_EA,
                         IARG_MEMORYWRITE_SIZE,
                         IARG_END);
@@ -202,9 +212,8 @@ VOID Instruction(INS ins, VOID *v)
 VOID Image(IMG img, VOID *v) 
 {
     RTN mallocRtn, freeRtn;
-    mallocRtn = RTN_FindByName(img, MALLOC);
-    freeRtn = RTN_FindByName(img, FREE);
 
+    mallocRtn = RTN_FindByName(img, MALLOC);
     if (RTN_Valid(mallocRtn)) 
     {
         RTN_Open(mallocRtn);
@@ -213,6 +222,7 @@ VOID Image(IMG img, VOID *v)
         RTN_Close(mallocRtn);
     }
 
+    freeRtn = RTN_FindByName(img, FREE);
     if (RTN_Valid(freeRtn)) 
     {
         RTN_Open(freeRtn);
@@ -221,51 +231,53 @@ VOID Image(IMG img, VOID *v)
     }
 }
 
-VOID Fini(INT32 code, VOID *v) 
+VOID Fini(INT32 code, VOID *v)
 {
-    isAllocating = true;
     unordered_map<ADDRINT,ObjectData*> seen;
-    unordered_map<ADDRINT,ObjectData*>::iterator mIter, seenIter;
+    unordered_map<ADDRINT,ObjectData*>::iterator liveObjectsIter, seenIter;
     unordered_map<size_t,vector<ObjectData*>>::iterator totalObjectsIter;
     vector<ObjectData*> *curAddrs;
     vector<ObjectData*>::iterator curAddrsIter;
+    ObjectData *d;
 
-    for (mIter = m.begin(); mIter != m.end(); mIter++) // Move objects that were never freed to totalObjects
+    for (liveObjectsIter = liveObjects.begin(); liveObjectsIter != liveObjects.end(); liveObjectsIter++) // Move objects that were never freed to totalObjects
     {
-        seenIter = seen.find(mIter->second->addr);
-        if (seenIter == seen.end())
+        d = liveObjectsIter->second;
+        seenIter = seen.find(d->addr);
+        if (seenIter == seen.end()) // If this object hasn't been seen yet, then add it to totalObjects
         {
-            seen.insert(make_pair<ADDRINT,ObjectData*>(mIter->second->addr, mIter->second));
-            mIter->second->Freeze();
-            totalObjects[mIter->second->size].push_back(mIter->second);
+            seen.insert(make_pair<ADDRINT,ObjectData*>(d->addr, d));
+            d->Freeze(); // Freeze data first so that coverage is calculated
+            totalObjects[d->size].push_back(d);
         }
     }
-    for (totalObjectsIter = totalObjects.begin(); totalObjectsIter != totalObjects.end(); totalObjectsIter++) // Print out all object data
+
+    for (totalObjectsIter = totalObjects.begin(); totalObjectsIter != totalObjects.end(); totalObjectsIter++) // Print out all data
     {
         curAddrs = &(totalObjectsIter->second);
-        traceFile << "malloc(" << totalObjectsIter->first << ")" << endl << "----------------------------------------" << endl;
+        traceFile << "OBJECT SIZE: " << totalObjectsIter->first << endl << "========================================" << endl;
         for (curAddrsIter = curAddrs->begin(); curAddrsIter != curAddrs->end(); curAddrsIter++)
         {
+            // We must output data to a file instead of stdout or stderr because stdout and stderr have been closed at this point
+            //
             traceFile << **curAddrsIter << endl;
         }
     }
-    isAllocating = false;
 }
 
 INT32 Usage() 
 {
-    cerr << "This tool tracks the number of reads and writes to allocated heap objects." << endl;
+    cerr << "This tool tracks the usage of objects returned by malloc." << endl;
     return EXIT_FAILURE;
 }
 
-int main(INT32 argc, CHAR *argv[]) 
+int main(int argc, char *argv[]) 
 {
     PIN_InitSymbols();
     if (PIN_Init(argc, argv)) 
     {
         return Usage();
     }
-    isAllocating = false;
     traceFile.open(knobOutputFile.Value().c_str());
     traceFile.setf(ios::showbase);
     IMG_AddInstrumentFunction(Image, 0);
