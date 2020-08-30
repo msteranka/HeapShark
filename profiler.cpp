@@ -76,11 +76,13 @@ class ObjectData
         UINT32 size, numReads, numWrites, bytesRead, bytesWritten;
         double readCoverage, writeCoverage;
         CHAR *readBuf, *writeBuf;
+        INT32 mallocLine, freeLine;
+        string mallocFile, freeFile;
 };
 
 ostream& operator<<(ostream& os, ObjectData &data) 
 {
-    return os << hex << data.addr << dec << ":" << endl <<
+    os << hex << data.addr << dec << ":" << endl <<
                  "\tnumReads: " << data.numReads << endl <<
                  "\tnumWrites: " << data.numWrites << endl <<
                  "\tbytesRead = " << data.bytesRead << endl <<
@@ -89,16 +91,40 @@ ostream& operator<<(ostream& os, ObjectData &data)
                  "\tWrite Factor = " << data.GetWriteFactor() << endl <<
                  "\tRead Coverage = " << data.readCoverage << endl << 
                  "\tWrite Coverage = " << data.writeCoverage << endl;
+
+    if (data.mallocFile == "")
+    {
+        os << "\tCould not locate malloc invocation point" << endl;
+    }
+    else
+    {
+        os << "\tAllocated in " << data.mallocFile << ":" << data.mallocLine << endl;
+    }
+
+    if (data.freeFile == "")
+    {
+        os << "\tCould not locate free invocation point" << endl;
+    }
+    else
+    {
+        os << "\tDeallocated in " << data.freeFile << ":" << data.freeLine << endl;
+    }
+
+    return os;
 }
 
-ADDRINT nextSize;
 unordered_map<ADDRINT,ObjectData*> liveObjects;
 unordered_map<size_t, vector<ObjectData*>> totalObjects;
 ofstream traceFile;
 KNOB<string> knobOutputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "profiler.out", "specify profiling file name");
+ADDRINT nextSize, nextRetIp;
 
-VOID MallocBefore(ADDRINT size)
+// Function arguments and return IP can only be accessed at the function entry point
+// Thus, we must insert a routine before malloc and cache these values
+//
+VOID MallocBefore(ADDRINT retIp, ADDRINT size)
 {
+    nextRetIp = retIp;
     nextSize = size;
 }
 
@@ -112,30 +138,47 @@ VOID MallocAfter(ADDRINT retVal)
         return;
     }
 
-    d = new ObjectData(retVal, nextSize); // We don't need to worry about recursive malloc calls since Pin doesn't instrument the PinTool itself
+    // We don't need to worry about recursive malloc calls since Pin doesn't instrument the PinTool itself
+    //
+    d = new ObjectData(retVal, nextSize);
     for (UINT32 i = 0; i < nextSize; i++)
     {
         nextAddr = (retVal + i);
-        liveObjects.insert(make_pair<ADDRINT,ObjectData*>(nextAddr, d)); // Create a mapping from every address in this object's range to the same ObjectData
+        // Create a mapping from every address in this object's range to the same ObjectData
+        //
+        liveObjects.insert(make_pair<ADDRINT,ObjectData*>(nextAddr, d));
     }
+
+    PIN_LockClient(); // Pin requires that PIN_LockClient be called before calling PIN_GetSourceLocation
+    // Given an address, fetch the line and file name
+    // NOTE: executable must be compiled with -g -gdwarf-2 -rdynamic to locate the invocation of malloc
+    // Additionally, PIN_GetSourceLocation does not necessarily get the exact invocation point, but it's pretty close
+    //
+    PIN_GetSourceLocation(nextRetIp, nullptr, &d->mallocLine, &d->mallocFile);
+    PIN_UnlockClient();
 
     PDEBUG("malloc(%u) = %p\n", (UINT32) nextSize, (VOID *) retVal);
 }
 
-VOID FreeHook(ADDRINT ptr) 
+VOID FreeHook(ADDRINT retIp, ADDRINT ptr) 
 {
     unordered_map<ADDRINT,ObjectData*>::iterator it;
     ObjectData *d;
     ADDRINT startAddr, endAddr;
 
     it = liveObjects.find(ptr);
-    if (it == liveObjects.end()) // If this is an invalid/double free, then skip this routine (provided that the allocator doesn't already kill the process)
+    // If this is an invalid/double free, then skip this routine (provided that the allocator doesn't already kill the process)
+    //
+    if (it == liveObjects.end())
     {
         return;
     }
 
     d = it->second;
     d->Freeze(); // Clean up the corresponding ObjectData, but keep its contents
+    PIN_LockClient();
+    PIN_GetSourceLocation(retIp, nullptr, &d->freeLine, &d->freeFile);
+    PIN_UnlockClient();
     totalObjects[d->size].push_back(d); // Insert the ObjectData into totalObjects
 
     startAddr = d->addr;
@@ -211,23 +254,31 @@ VOID Instruction(INS ins, VOID *v)
 
 VOID Image(IMG img, VOID *v) 
 {
-    RTN mallocRtn, freeRtn;
+    RTN rtn;
 
-    mallocRtn = RTN_FindByName(img, MALLOC);
-    if (RTN_Valid(mallocRtn)) 
+    rtn = RTN_FindByName(img, MALLOC);
+    if (RTN_Valid(rtn)) 
     {
-        RTN_Open(mallocRtn);
-        RTN_InsertCall(mallocRtn, IPOINT_BEFORE, (AFUNPTR) MallocBefore, IARG_FUNCARG_ENTRYPOINT_VALUE, 0, IARG_END);
-        RTN_InsertCall(mallocRtn, IPOINT_AFTER, (AFUNPTR) MallocAfter, IARG_FUNCRET_EXITPOINT_VALUE, IARG_END);
-        RTN_Close(mallocRtn);
+        RTN_Open(rtn);
+        RTN_InsertCall(rtn, IPOINT_BEFORE, (AFUNPTR) MallocBefore, // Hook calls to malloc with MallocBefore
+                        IARG_RETURN_IP, 
+                        IARG_FUNCARG_ENTRYPOINT_VALUE, 
+                        0, IARG_END);
+        RTN_InsertCall(rtn, IPOINT_AFTER, (AFUNPTR) MallocAfter, // Hook calls to malloc with MallocAfter
+                        IARG_FUNCRET_EXITPOINT_VALUE, 
+                        IARG_END);
+        RTN_Close(rtn);
     }
 
-    freeRtn = RTN_FindByName(img, FREE);
-    if (RTN_Valid(freeRtn)) 
+    rtn = RTN_FindByName(img, FREE);
+    if (RTN_Valid(rtn)) 
     {
-        RTN_Open(freeRtn);
-        RTN_InsertCall(freeRtn, IPOINT_BEFORE, (AFUNPTR) FreeHook, IARG_FUNCARG_ENTRYPOINT_VALUE, 0, IARG_END);
-        RTN_Close(freeRtn);
+        RTN_Open(rtn);
+        RTN_InsertCall(rtn, IPOINT_BEFORE, (AFUNPTR) FreeHook, // Hook calls to free with FreeHook
+                        IARG_RETURN_IP, 
+                        IARG_FUNCARG_ENTRYPOINT_VALUE, 
+                        0, IARG_END);
+        RTN_Close(rtn);
     }
 }
 
@@ -240,7 +291,9 @@ VOID Fini(INT32 code, VOID *v)
     vector<ObjectData*>::iterator curAddrsIter;
     ObjectData *d;
 
-    for (liveObjectsIter = liveObjects.begin(); liveObjectsIter != liveObjects.end(); liveObjectsIter++) // Move objects that were never freed to totalObjects
+    // Move objects that were never freed to totalObjects
+    //
+    for (liveObjectsIter = liveObjects.begin(); liveObjectsIter != liveObjects.end(); liveObjectsIter++)
     {
         d = liveObjectsIter->second;
         seenIter = seen.find(d->addr);
@@ -252,10 +305,13 @@ VOID Fini(INT32 code, VOID *v)
         }
     }
 
-    for (totalObjectsIter = totalObjects.begin(); totalObjectsIter != totalObjects.end(); totalObjectsIter++) // Print out all data
+    // Print out all data
+    //
+    for (totalObjectsIter = totalObjects.begin(); totalObjectsIter != totalObjects.end(); totalObjectsIter++)
     {
         curAddrs = &(totalObjectsIter->second);
-        traceFile << "OBJECT SIZE: " << totalObjectsIter->first << endl << "========================================" << endl;
+        traceFile << "OBJECT SIZE: " << totalObjectsIter->first << endl << 
+                        "========================================" << endl;
         for (curAddrsIter = curAddrs->begin(); curAddrsIter != curAddrs->end(); curAddrsIter++)
         {
             // We must output data to a file instead of stdout or stderr because stdout and stderr have been closed at this point

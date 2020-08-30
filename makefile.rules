@@ -61,8 +61,10 @@ SANITY_SUBSET := $(TEST_TOOL_ROOTS) $(TEST_ROOTS)
 # This section contains the build rules for all binaries that have special build rules.
 # See makefile.default.rules for the default build rules.
 
+PROF_FLAGS = -DPROF_DEBUG
+
 profiler$(OBJ_SUFFIX): profiler.cpp
-	$(CXX) $(TOOL_CXXFLAGS) -DPROF_DEBUG $(COMP_OBJ) $@ $<
+	$(CXX) $(TOOL_CXXFLAGS) $(PROF_FLAGS) $(COMP_OBJ) $@ $<
 
 profiler$(PINTOOL_SUFFIX): profiler$(OBJ_SUFFIX)
-	$(LINKER) $(TOOL_LDFLAGS) -DPROF_DEBUG $(LINK_EXE) $@ $< $(TOOL_LPATHS) $(TOOL_LIBS)
+	$(LINKER) $(TOOL_LDFLAGS) $(PROF_FLAGS) $(LINK_EXE) $@ $< $(TOOL_LPATHS) $(TOOL_LIBS)
