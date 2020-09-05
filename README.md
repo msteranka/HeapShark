@@ -5,4 +5,5 @@ A memory profiler for analyzing allocations that can be replaced with stack allo
 # Usage
 
 make PIN\_ROOT=path/to/Pin profiler.so
+
 path/to/Pin/pin -t profiler.so -- path/to/executable
