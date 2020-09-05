@@ -22,8 +22,14 @@
 #endif // PROF_DEBUG
 
 #define FILLER 'a'
+#define MAX_DEPTH 3
 
 using namespace std;
+
+typedef struct {
+    string files[MAX_DEPTH];
+    INT32 lines[MAX_DEPTH];
+} Backtrace;
 
 class ObjectData
 {
@@ -76,12 +82,13 @@ class ObjectData
         UINT32 size, numReads, numWrites, bytesRead, bytesWritten;
         double readCoverage, writeCoverage;
         CHAR *readBuf, *writeBuf;
-        INT32 mallocLine, freeLine;
-        string mallocFile, freeFile;
+        Backtrace mallocTrace, freeTrace;
 };
 
 ostream& operator<<(ostream& os, ObjectData &data) 
 {
+    Backtrace *t;
+
     os << hex << data.addr << dec << ":" << endl <<
                  "\tnumReads: " << data.numReads << endl <<
                  "\tnumWrites: " << data.numWrites << endl <<
@@ -92,22 +99,32 @@ ostream& operator<<(ostream& os, ObjectData &data)
                  "\tRead Coverage = " << data.readCoverage << endl << 
                  "\tWrite Coverage = " << data.writeCoverage << endl;
 
-    if (data.mallocFile == "")
+    t = &(data.mallocTrace);
+    os << "\tmalloc Backtrace:" << endl;
+    for (INT32 i = 0; i < MAX_DEPTH; i++)
     {
-        os << "\tCould not locate malloc invocation point" << endl;
-    }
-    else
-    {
-        os << "\tAllocated in " << data.mallocFile << ":" << data.mallocLine << endl;
+        if (t->files[i] == "")
+        {
+            os << "\t\t(NIL)" << endl;
+        }
+        else
+        {
+            os << "\t\t" << t->files[i] << ":" << t->lines[i] << endl;
+        }
     }
 
-    if (data.freeFile == "")
+    t = &(data.freeTrace);
+    os << "\tfree Backtrace:" << endl;
+    for (INT32 i = 0; i < MAX_DEPTH; i++)
     {
-        os << "\tCould not locate free invocation point" << endl;
-    }
-    else
-    {
-        os << "\tDeallocated in " << data.freeFile << ":" << data.freeLine << endl;
+        if (t->files[i] == "")
+        {
+            os << "\t\t(NIL)" << endl;
+        }
+        else
+        {
+            os << "\t\t" << t->files[i] << ":" << t->lines[i] << endl;
+        }
     }
 
     return os;
@@ -117,15 +134,40 @@ unordered_map<ADDRINT,ObjectData*> liveObjects;
 unordered_map<size_t, vector<ObjectData*>> totalObjects;
 ofstream traceFile;
 KNOB<string> knobOutputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "profiler.out", "specify profiling file name");
-ADDRINT nextSize, nextRetIp;
+ADDRINT cachedSize;
+Backtrace cachedTrace;
 
-// Function arguments and return IP can only be accessed at the function entry point
+VOID GetTrace(Backtrace *trace, CONTEXT *ctxt)
+{
+    // buf contains MAX_DEPTH + 1 addresses because PIN_Backtrace also returns
+    // the stack frame for malloc
+    //
+    VOID *buf[MAX_DEPTH + 1];
+    INT32 depth;
+
+    // Pin requires us to call Pin_LockClient() before calling PIN_Backtrace and
+    // PIN_GetSourceLocation
+    //
+    PIN_LockClient();
+    depth = PIN_Backtrace(ctxt, buf, MAX_DEPTH + 1);
+    for (INT32 i = 1; i < depth; i++) // We set i = 1 because we don't want to include the stack frame for malloc
+    {
+
+        // NOTE: executable must be compiled with -g -gdwarf-2 -rdynamic to locate the invocation of malloc
+        // Additionally, PIN_GetSourceLocation does not necessarily get the exact invocation point, but it's pretty close
+        //
+        PIN_GetSourceLocation((ADDRINT) buf[i], nullptr, trace->lines + i - 1, trace->files + i - 1);
+    }
+    PIN_UnlockClient();
+}
+
+// Function arguments and backtrace can only be accessed at the function entry point
 // Thus, we must insert a routine before malloc and cache these values
 //
-VOID MallocBefore(ADDRINT retIp, ADDRINT size)
+VOID MallocBefore(CONTEXT *ctxt, ADDRINT size)
 {
-    nextRetIp = retIp;
-    nextSize = size;
+    GetTrace(&cachedTrace, ctxt);
+    cachedSize = size;
 }
 
 VOID MallocAfter(ADDRINT retVal)
@@ -140,8 +182,8 @@ VOID MallocAfter(ADDRINT retVal)
 
     // We don't need to worry about recursive malloc calls since Pin doesn't instrument the PinTool itself
     //
-    d = new ObjectData(retVal, nextSize);
-    for (UINT32 i = 0; i < nextSize; i++)
+    d = new ObjectData(retVal, cachedSize);
+    for (UINT32 i = 0; i < cachedSize; i++)
     {
         nextAddr = (retVal + i);
         // Create a mapping from every address in this object's range to the same ObjectData
@@ -149,18 +191,16 @@ VOID MallocAfter(ADDRINT retVal)
         liveObjects.insert(make_pair<ADDRINT,ObjectData*>(nextAddr, d));
     }
 
-    PIN_LockClient(); // Pin requires that PIN_LockClient be called before calling PIN_GetSourceLocation
-    // Given an address, fetch the line and file name
-    // NOTE: executable must be compiled with -g -gdwarf-2 -rdynamic to locate the invocation of malloc
-    // Additionally, PIN_GetSourceLocation does not necessarily get the exact invocation point, but it's pretty close
-    //
-    PIN_GetSourceLocation(nextRetIp, nullptr, &d->mallocLine, &d->mallocFile);
-    PIN_UnlockClient();
+    for (int i = 0; i < MAX_DEPTH; i++)
+    {
+        d->mallocTrace.lines[i] = cachedTrace.lines[i];
+        d->mallocTrace.files[i] = cachedTrace.files[i];
+    }
 
-    PDEBUG("malloc(%u) = %p\n", (UINT32) nextSize, (VOID *) retVal);
+    PDEBUG("malloc(%u) = %p\n", (UINT32) cachedSize, (VOID *) retVal);
 }
 
-VOID FreeHook(ADDRINT retIp, ADDRINT ptr) 
+VOID FreeHook(CONTEXT *ctxt, ADDRINT ptr) 
 {
     unordered_map<ADDRINT,ObjectData*>::iterator it;
     ObjectData *d;
@@ -176,9 +216,7 @@ VOID FreeHook(ADDRINT retIp, ADDRINT ptr)
 
     d = it->second;
     d->Freeze(); // Clean up the corresponding ObjectData, but keep its contents
-    PIN_LockClient();
-    PIN_GetSourceLocation(retIp, nullptr, &d->freeLine, &d->freeFile);
-    PIN_UnlockClient();
+    GetTrace(&d->freeTrace, ctxt);
     totalObjects[d->size].push_back(d); // Insert the ObjectData into totalObjects
 
     startAddr = d->addr;
@@ -261,7 +299,7 @@ VOID Image(IMG img, VOID *v)
     {
         RTN_Open(rtn);
         RTN_InsertCall(rtn, IPOINT_BEFORE, (AFUNPTR) MallocBefore, // Hook calls to malloc with MallocBefore
-                        IARG_RETURN_IP, 
+                        IARG_CONST_CONTEXT,
                         IARG_FUNCARG_ENTRYPOINT_VALUE, 
                         0, IARG_END);
         RTN_InsertCall(rtn, IPOINT_AFTER, (AFUNPTR) MallocAfter, // Hook calls to malloc with MallocAfter
@@ -275,7 +313,7 @@ VOID Image(IMG img, VOID *v)
     {
         RTN_Open(rtn);
         RTN_InsertCall(rtn, IPOINT_BEFORE, (AFUNPTR) FreeHook, // Hook calls to free with FreeHook
-                        IARG_RETURN_IP, 
+                        IARG_CONST_CONTEXT, 
                         IARG_FUNCARG_ENTRYPOINT_VALUE, 
                         0, IARG_END);
         RTN_Close(rtn);
