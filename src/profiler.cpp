@@ -6,6 +6,10 @@
 #include <utility>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
+#include "objectdata.h"
+#include "backtrace.h"
+#include "misc.h"
 
 #ifdef TARGET_MAC
 #define MALLOC "_malloc"
@@ -21,114 +25,7 @@
 #define PDEBUG(fmt, args...)
 #endif // PROF_DEBUG
 
-#define FILLER 'a'
-#define MAX_DEPTH 3
-
 using namespace std;
-
-typedef struct {
-    string files[MAX_DEPTH];
-    INT32 lines[MAX_DEPTH];
-} Backtrace;
-
-class ObjectData
-{
-    public:
-        ObjectData(ADDRINT addr, UINT32 size)
-        {
-            this->addr = addr;
-            this->size = size;
-            numReads = numWrites = bytesRead = bytesWritten = 0;
-            readBuf = (CHAR *) calloc(size, 1);
-            writeBuf = (CHAR *) calloc(size, 1);
-        }
-
-        VOID Freeze()
-        {
-            UINT32 read = 0, written = 0;
-
-            // Calculate read and write coverage
-            // NOTE: coverage can be misleading on structs/classes that require extra space for alignment
-            //
-            for (UINT32 i = 0; i < size; i++)
-
-            {
-                if (readBuf[i] == FILLER)
-                {
-                    read++;
-                }
-                if (writeBuf[i] == FILLER)
-                {
-                    written++;
-                }
-            }
-            readCoverage = (double) read / size;
-            writeCoverage = (double) written / size;
-            free(readBuf);
-            free(writeBuf);
-        }
-
-        double GetReadFactor()
-        {
-            return (double) numReads / bytesRead;
-        }
-
-        double GetWriteFactor()
-        {
-            return (double) numWrites / bytesWritten;
-        }
-
-        ADDRINT addr;
-        UINT32 size, numReads, numWrites, bytesRead, bytesWritten;
-        double readCoverage, writeCoverage;
-        CHAR *readBuf, *writeBuf;
-        Backtrace mallocTrace, freeTrace;
-};
-
-ostream& operator<<(ostream& os, ObjectData &data) 
-{
-    Backtrace *t;
-
-    os << hex << data.addr << dec << ":" << endl <<
-                 "\tnumReads: " << data.numReads << endl <<
-                 "\tnumWrites: " << data.numWrites << endl <<
-                 "\tbytesRead = " << data.bytesRead << endl <<
-                 "\tbytesWritten = " << data.bytesWritten << endl <<
-                 "\tRead Factor = " << data.GetReadFactor() << endl <<
-                 "\tWrite Factor = " << data.GetWriteFactor() << endl <<
-                 "\tRead Coverage = " << data.readCoverage << endl << 
-                 "\tWrite Coverage = " << data.writeCoverage << endl;
-
-    t = &(data.mallocTrace);
-    os << "\tmalloc Backtrace:" << endl;
-    for (INT32 i = 0; i < MAX_DEPTH; i++)
-    {
-        if (t->files[i] == "")
-        {
-            os << "\t\t(NIL)" << endl;
-        }
-        else
-        {
-            os << "\t\t" << t->files[i] << ":" << t->lines[i] << endl;
-        }
-    }
-
-    t = &(data.freeTrace);
-    os << "\tfree Backtrace:" << endl;
-    for (INT32 i = 0; i < MAX_DEPTH; i++)
-    {
-        if (t->files[i] == "")
-        {
-            os << "\t\t(NIL)" << endl;
-        }
-        else
-        {
-            os << "\t\t" << t->files[i] << ":" << t->lines[i] << endl;
-        }
-    }
-
-    return os;
-}
 
 unordered_map<ADDRINT,ObjectData*> liveObjects;
 unordered_map<size_t, vector<ObjectData*>> totalObjects;
@@ -166,8 +63,8 @@ VOID GetTrace(Backtrace *trace, CONTEXT *ctxt)
 //
 VOID MallocBefore(CONTEXT *ctxt, ADDRINT size)
 {
-    GetTrace(&cachedTrace, ctxt);
-    cachedSize = size;
+    GetTrace(&cachedTrace, ctxt); // NOT THREAD SAFE!
+    cachedSize = size; // NOT THREAD SAFE!
 }
 
 VOID MallocAfter(ADDRINT retVal)
@@ -182,22 +79,22 @@ VOID MallocAfter(ADDRINT retVal)
 
     // We don't need to worry about recursive malloc calls since Pin doesn't instrument the PinTool itself
     //
-    d = new ObjectData(retVal, cachedSize);
-    for (UINT32 i = 0; i < cachedSize; i++)
+    d = new ObjectData(retVal, cachedSize); // NOT THREAD SAFE!
+    for (UINT32 i = 0; i < cachedSize; i++) // NOT THREAD SAFE!
     {
         nextAddr = (retVal + i);
         // Create a mapping from every address in this object's range to the same ObjectData
         //
-        liveObjects.insert(make_pair<ADDRINT,ObjectData*>(nextAddr, d));
+        liveObjects.insert(make_pair<ADDRINT,ObjectData*>(nextAddr, d)); // NOT THREAD SAFE!
     }
 
-    for (int i = 0; i < MAX_DEPTH; i++)
+    for (UINT32 i = 0; i < MAX_DEPTH; i++)
     {
-        d->mallocTrace.lines[i] = cachedTrace.lines[i];
-        d->mallocTrace.files[i] = cachedTrace.files[i];
+        d->mallocTrace.files[i] = cachedTrace.files[i]; // NOT THREAD SAFE!
+        d->mallocTrace.lines[i] = cachedTrace.lines[i]; // NOT THREAD SAFE!
     }
 
-    PDEBUG("malloc(%u) = %p\n", (UINT32) cachedSize, (VOID *) retVal);
+    PDEBUG("malloc(%u) = %p\n", (UINT32) cachedSize, (VOID *) retVal); // NOT THREAD SAFE!
 }
 
 VOID FreeHook(CONTEXT *ctxt, ADDRINT ptr) 
@@ -206,10 +103,10 @@ VOID FreeHook(CONTEXT *ctxt, ADDRINT ptr)
     ObjectData *d;
     ADDRINT startAddr, endAddr;
 
-    it = liveObjects.find(ptr);
+    it = liveObjects.find(ptr); // NOT THREAD SAFE!
     // If this is an invalid/double free, then skip this routine (provided that the allocator doesn't already kill the process)
     //
-    if (it == liveObjects.end())
+    if (it == liveObjects.end()) // NOT THREAD SAFE!
     {
         return;
     }
@@ -217,13 +114,13 @@ VOID FreeHook(CONTEXT *ctxt, ADDRINT ptr)
     d = it->second;
     d->Freeze(); // Clean up the corresponding ObjectData, but keep its contents
     GetTrace(&d->freeTrace, ctxt);
-    totalObjects[d->size].push_back(d); // Insert the ObjectData into totalObjects
+    totalObjects[d->size].push_back(d); // Insert the ObjectData into totalObjects - NOT THREAD SAFE!
 
     startAddr = d->addr;
     endAddr = startAddr + d->size;
     while (startAddr != endAddr)
     {
-        liveObjects.erase(startAddr++); // Remove all mappings corresponding to this object
+        liveObjects.erase(startAddr++); // Remove all mappings corresponding to this object - NOT THREAD SAFE!
     }
 
     PDEBUG("free(%p)\n", (VOID *) ptr);
@@ -235,17 +132,17 @@ VOID ReadsMem(ADDRINT addrRead, UINT32 readSize)
     ObjectData *d;
     VOID *fillAddr;
 
-    it = liveObjects.find(addrRead);
-    if (it == liveObjects.end()) // If this is not an object returned by malloc, then skip this routine
+    it = liveObjects.find(addrRead); // NOT THREAD SAFE
+    if (it == liveObjects.end()) // If this is not an object returned by malloc, then skip this routine - NOT THREAD SAFE
     {
         return;
     }
 
-    d = it->second;
-    d->numReads++;
-    d->bytesRead += readSize;
+    d = it->second; // NOTE: can a thread be reading/writing to an object that is currently being freed?
+    d->numReads++; // NOT THREAD SAFE
+    d->bytesRead += readSize; // NOT THREAD SAFE
     fillAddr = d->readBuf + (addrRead - d->addr);
-    memset(fillAddr, FILLER, readSize); // Write to readBuf at the same offset the object is being read from
+    memset(fillAddr, FILLER, readSize); // Write to readBuf at the same offset the object is being read from - NOT THREAD SAFE
 
     PDEBUG("Read %d bytes @ %p\n", readSize, (VOID *) addrRead);
 }
@@ -256,17 +153,17 @@ VOID WritesMem(ADDRINT addrWritten, UINT32 writeSize)
     ObjectData *d;
     VOID *fillAddr;
 
-    it = liveObjects.find(addrWritten);
-    if (it == liveObjects.end()) // If this is not an object returned by malloc, then skip this routine
+    it = liveObjects.find(addrWritten); // NOT THREAD SAFE
+    if (it == liveObjects.end()) // If this is not an object returned by malloc, then skip this routine - NOT THREAD SAFE
     {
         return;
     }
 
-    d = it->second;
-    d->numWrites++;
-    d->bytesWritten += writeSize;
+    d = it->second; // NOTE: can a thread be reading/writing to an object that is currently being freed?
+    d->numWrites++; // NOT THREAD SAFE
+    d->bytesWritten += writeSize; // NOT THREAD SAFE
     fillAddr = d->writeBuf + (addrWritten - d->addr);
-    memset(fillAddr, FILLER, writeSize); // Write to writeBuf at the same offset the object is being written to
+    memset(fillAddr, FILLER, writeSize); // Write to writeBuf at the same offset the object is being written to - NOT THREAD SAFE
 
     PDEBUG("Wrote %d bytes @ %p\n", writeSize, (VOID *) addrWritten);
 }

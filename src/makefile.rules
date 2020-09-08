@@ -62,9 +62,10 @@ SANITY_SUBSET := $(TEST_TOOL_ROOTS) $(TEST_ROOTS)
 # See makefile.default.rules for the default build rules.
 
 PROF_FLAGS = -DPROF_DEBUG
+PROF_INCLUDES = -I../include
 
-profiler$(OBJ_SUFFIX): profiler.cpp
-	$(CXX) $(TOOL_CXXFLAGS) $(PROF_FLAGS) $(COMP_OBJ) $@ $<
+$(OBJDIR)profiler$(OBJ_SUFFIX): profiler.cpp
+	$(CXX) $(TOOL_CXXFLAGS) $(PROF_FLAGS) $(PROF_INCLUDES) $(COMP_OBJ) $@ $<
 
-profiler$(PINTOOL_SUFFIX): profiler$(OBJ_SUFFIX)
-	$(LINKER) $(TOOL_LDFLAGS) $(PROF_FLAGS) $(LINK_EXE) $@ $< $(TOOL_LPATHS) $(TOOL_LIBS)
+$(OBJDIR)profiler$(PINTOOL_SUFFIX): $(OBJDIR)profiler$(OBJ_SUFFIX)
+	$(LINKER) $(TOOL_LDFLAGS) $(PROF_FLAGS) $(PROF_INCLUDES) $(LINK_EXE) $@ $< $(TOOL_LPATHS) $(TOOL_LIBS)
