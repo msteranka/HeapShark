@@ -7,9 +7,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
-#include "objectdata.h"
-#include "backtrace.h"
-#include "misc.h"
+#include "objectdata.hpp"
+#include "backtrace.hpp"
+#include "misc.hpp"
 
 #ifdef TARGET_MAC
 #define MALLOC "_malloc"
@@ -32,38 +32,14 @@ unordered_map<size_t, vector<ObjectData*>> totalObjects;
 ofstream traceFile;
 KNOB<string> knobOutputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "profiler.out", "specify profiling file name");
 ADDRINT cachedSize;
-Backtrace cachedTrace;
-
-VOID GetTrace(Backtrace *trace, CONTEXT *ctxt)
-{
-    // buf contains MAX_DEPTH + 1 addresses because PIN_Backtrace also returns
-    // the stack frame for malloc
-    //
-    VOID *buf[MAX_DEPTH + 1];
-    INT32 depth;
-
-    // Pin requires us to call Pin_LockClient() before calling PIN_Backtrace and
-    // PIN_GetSourceLocation
-    //
-    PIN_LockClient();
-    depth = PIN_Backtrace(ctxt, buf, MAX_DEPTH + 1);
-    for (INT32 i = 1; i < depth; i++) // We set i = 1 because we don't want to include the stack frame for malloc
-    {
-
-        // NOTE: executable must be compiled with -g -gdwarf-2 -rdynamic to locate the invocation of malloc
-        // Additionally, PIN_GetSourceLocation does not necessarily get the exact invocation point, but it's pretty close
-        //
-        PIN_GetSourceLocation((ADDRINT) buf[i], nullptr, trace->lines + i - 1, trace->files + i - 1);
-    }
-    PIN_UnlockClient();
-}
+Backtrace cachedTrace(3);
 
 // Function arguments and backtrace can only be accessed at the function entry point
 // Thus, we must insert a routine before malloc and cache these values
 //
 VOID MallocBefore(CONTEXT *ctxt, ADDRINT size)
 {
-    GetTrace(&cachedTrace, ctxt); // NOT THREAD SAFE!
+    cachedTrace.SetTrace(ctxt); // NOT THREAD SAFE!
     cachedSize = size; // NOT THREAD SAFE!
 }
 
@@ -88,11 +64,7 @@ VOID MallocAfter(ADDRINT retVal)
         liveObjects.insert(make_pair<ADDRINT,ObjectData*>(nextAddr, d)); // NOT THREAD SAFE!
     }
 
-    for (UINT32 i = 0; i < MAX_DEPTH; i++)
-    {
-        d->mallocTrace.files[i] = cachedTrace.files[i]; // NOT THREAD SAFE!
-        d->mallocTrace.lines[i] = cachedTrace.lines[i]; // NOT THREAD SAFE!
-    }
+    d->mallocTrace = cachedTrace; // NOT THREAD SAFE!
 
     PDEBUG("malloc(%u) = %p\n", (UINT32) cachedSize, (VOID *) retVal); // NOT THREAD SAFE!
 }
@@ -113,7 +85,8 @@ VOID FreeHook(CONTEXT *ctxt, ADDRINT ptr)
 
     d = it->second;
     d->Freeze(); // Clean up the corresponding ObjectData, but keep its contents
-    GetTrace(&d->freeTrace, ctxt);
+    d->freeTrace.SetTrace(ctxt);
+    cout << d->freeTrace << endl;
     totalObjects[d->size].push_back(d); // Insert the ObjectData into totalObjects - NOT THREAD SAFE!
 
     startAddr = d->addr;

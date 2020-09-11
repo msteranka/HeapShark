@@ -4,19 +4,24 @@
 #include "pin.H"
 #include <iostream>
 #include <new>
-#include "backtrace.h"
-#include "misc.h"
+#include "backtrace.hpp"
+#include "misc.hpp"
 
 using namespace std;
 
 class ObjectData
 {
     public:
-        ObjectData(ADDRINT addr, UINT32 size)
+        ObjectData(ADDRINT addr, UINT32 size) : 
+            addr(addr),
+            size(size),
+            numReads(0),
+            numWrites(0),
+            bytesRead(0),
+            bytesWritten(0),
+            mallocTrace(3),
+            freeTrace(3)
         {
-            this->addr = addr;
-            this->size = size;
-            numReads = numWrites = bytesRead = bytesWritten = 0;
             readBuf = new CHAR[size];
             memset(readBuf, 0, size);
             writeBuf = new CHAR[size];
@@ -65,10 +70,8 @@ class ObjectData
         Backtrace mallocTrace, freeTrace;
 };
 
-ostream& operator<<(ostream& os, ObjectData &data) 
+ostream& operator<<(ostream& os, ObjectData& data) 
 {
-    Backtrace *t;
-
     os << hex << data.addr << dec << ":" << endl <<
                  "\tnumReads: " << data.numReads << endl <<
                  "\tnumWrites: " << data.numWrites << endl <<
@@ -77,35 +80,9 @@ ostream& operator<<(ostream& os, ObjectData &data)
                  "\tRead Factor = " << data.GetReadFactor() << endl <<
                  "\tWrite Factor = " << data.GetWriteFactor() << endl <<
                  "\tRead Coverage = " << data.readCoverage << endl << 
-                 "\tWrite Coverage = " << data.writeCoverage << endl;
-
-    t = &(data.mallocTrace);
-    os << "\tmalloc Backtrace:" << endl;
-    for (INT32 i = 0; i < MAX_DEPTH; i++)
-    {
-        if (t->files[i] == "")
-        {
-            os << "\t\t(NIL)" << endl;
-        }
-        else
-        {
-            os << "\t\t" << t->files[i] << ":" << t->lines[i] << endl;
-        }
-    }
-
-    t = &(data.freeTrace);
-    os << "\tfree Backtrace:" << endl;
-    for (INT32 i = 0; i < MAX_DEPTH; i++)
-    {
-        if (t->files[i] == "")
-        {
-            os << "\t\t(NIL)" << endl;
-        }
-        else
-        {
-            os << "\t\t" << t->files[i] << ":" << t->lines[i] << endl;
-        }
-    }
+                 "\tWrite Coverage = " << data.writeCoverage << endl <<
+                 "malloc Backtrace:" << endl << data.mallocTrace << endl <<
+                 "free Backtrace:" << endl << data.freeTrace << endl;
 
     return os;
 }
