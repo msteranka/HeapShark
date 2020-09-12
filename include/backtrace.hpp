@@ -1,13 +1,10 @@
-#ifndef __BACKTRACE_H
-#define __BACKTRACE_H
+#ifndef __BACKTRACE_HPP
+#define __BACKTRACE_HPP
 
 #include "pin.H"
 #include <iostream>
 
 using namespace std;
-
-class Backtrace;
-ostream& operator<<(ostream& os, Backtrace& bt);
 
 class Backtrace 
 {
@@ -15,7 +12,7 @@ class Backtrace
         // A Backtrace is initialized with the maximum number of stack frames
         // that it will go down
         //
-        Backtrace(INT32 maxDepth) : depth(0), maxDepth(maxDepth)
+        Backtrace() : depth(0)
         {
             trace = new pair<string,INT32>[maxDepth];
         }
@@ -79,7 +76,7 @@ class Backtrace
         //
         pair<string,INT32> *trace;
         INT32 depth;
-        const INT32 maxDepth;
+        static const INT32 maxDepth = 3;
 };
 
 ostream& operator<<(ostream& os, Backtrace& bt)
