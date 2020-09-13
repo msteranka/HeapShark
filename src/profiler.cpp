@@ -1,6 +1,4 @@
 #include "pin.H"
-#include <unordered_map>
-#include <vector>
 #include <fstream>
 #include <iostream>
 #include <utility>
@@ -9,6 +7,7 @@
 #include <string>
 #include "objectdata.hpp"
 #include "backtrace.hpp"
+#include "objectmanager.hpp"
 
 #ifdef TARGET_MAC
 #define MALLOC "_malloc"
@@ -26,12 +25,11 @@
 
 using namespace std;
 
-unordered_map<ADDRINT,ObjectData*> liveObjects;
-unordered_map<size_t, vector<ObjectData*>> totalObjects;
-ofstream traceFile;
-KNOB<string> knobOutputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "profiler.out", "specify profiling file name");
-ADDRINT cachedSize;
-Backtrace cachedTrace;
+static ofstream traceFile;
+static KNOB<string> knobOutputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "profiler.out", "specify profiling file name");
+static ObjectManager manager;
+static ADDRINT cachedSize;
+static Backtrace cachedTrace;
 
 // Function arguments and backtrace can only be accessed at the function entry point
 // Thus, we must insert a routine before malloc and cache these values
@@ -44,93 +42,42 @@ VOID MallocBefore(CONTEXT *ctxt, ADDRINT size)
 
 VOID MallocAfter(ADDRINT retVal)
 {
-    ObjectData *d;
-    ADDRINT nextAddr;
-
     if ((VOID *) retVal == nullptr) // Check for success since we don't want to track null pointers
     {
         return;
     }
-
-    // We don't need to worry about recursive malloc calls since Pin doesn't instrument the PinTool itself
-    //
-    d = new ObjectData(retVal, cachedSize); // NOT THREAD SAFE!
-    d->SetMallocTrace(cachedTrace); // NOT THREAD SAFE!
-    for (UINT32 i = 0; i < cachedSize; i++) // NOT THREAD SAFE!
-    {
-        nextAddr = (retVal + i);
-        // Create a mapping from every address in this object's range to the same ObjectData
-        //
-        liveObjects.insert(make_pair<ADDRINT,ObjectData*>(nextAddr, d)); // NOT THREAD SAFE!
-    }
-
-    PDEBUG("malloc(%u) = %p\n", (UINT32) cachedSize, (VOID *) retVal); // NOT THREAD SAFE!
+    manager.AddObject(retVal, (UINT32) cachedSize, cachedTrace);
+    PDEBUG("malloc(%u) = %p\n", (UINT32) cachedSize, (VOID *) retVal);
 }
 
 VOID FreeHook(CONTEXT *ctxt, ADDRINT ptr) 
 {
-    unordered_map<ADDRINT,ObjectData*>::iterator it;
-    ObjectData *d;
-    ADDRINT startAddr, endAddr;
-
-    it = liveObjects.find(ptr); // NOT THREAD SAFE!
-    // If this is an invalid/double free, then skip this routine (provided that the allocator doesn't already kill the process)
-    //
-    if (it == liveObjects.end()) // NOT THREAD SAFE!
-    {
-        return;
-    }
-
-    d = it->second;
-    d->SetFreeTrace(ctxt);
-    totalObjects[d->GetSize()].push_back(d); // Insert the ObjectData into totalObjects - NOT THREAD SAFE!
-
-    startAddr = d->GetAddr();
-    endAddr = startAddr + d->GetSize();
-    while (startAddr != endAddr)
-    {
-        liveObjects.erase(startAddr++); // Remove all mappings corresponding to this object - NOT THREAD SAFE!
-    }
-
+    manager.RemoveObject(ptr, ctxt);
     PDEBUG("free(%p)\n", (VOID *) ptr);
 }
 
 VOID ReadsMem(ADDRINT addrRead, UINT32 readSize) 
 {
-    unordered_map<ADDRINT,ObjectData*>::iterator it;
-    ObjectData *d;
-
-    it = liveObjects.find(addrRead); // NOT THREAD SAFE
-    if (it == liveObjects.end()) // If this is not an object returned by malloc, then skip this routine - NOT THREAD SAFE
+    #ifdef PROF_DEBUG
+    if(manager.ReadObject(addrRead, readSize))
     {
-        return;
+        PDEBUG("Read %d bytes @ %p\n", readSize, (VOID *) addrRead);
     }
-
-    d = it->second; // NOTE: can a thread be reading/writing to an object that is currently being freed?
-    d->SetNumReads(d->GetNumReads() + 1); // NOT THREAD SAFE
-    d->SetBytesRead(d->GetBytesRead() + readSize); // NOT THREAD SAFE
-    d->UpdateReadCoverage(addrRead, readSize); // NOT THREAD SAFE
-
-    PDEBUG("Read %d bytes @ %p\n", readSize, (VOID *) addrRead);
+    #else
+    manager.ReadObject(addrRead, readSize);
+    #endif
 }
 
 VOID WritesMem(ADDRINT addrWritten, UINT32 writeSize) 
 {
-    unordered_map<ADDRINT,ObjectData*>::iterator it;
-    ObjectData *d;
-
-    it = liveObjects.find(addrWritten); // NOT THREAD SAFE
-    if (it == liveObjects.end()) // If this is not an object returned by malloc, then skip this routine - NOT THREAD SAFE
+    #ifdef PROF_DEBUG
+    if(manager.WriteObject(addrWritten, writeSize))
     {
-        return;
+        PDEBUG("Wrote %d bytes @ %p\n", writeSize, (VOID *) addrWritten);
     }
-
-    d = it->second; // NOTE: can a thread be reading/writing to an object that is currently being freed?
-    d->SetNumWrites(d->GetNumWrites() + 1); // NOT THREAD SAFE
-    d->SetBytesWritten(d->GetBytesWritten() + writeSize); // NOT THREAD SAFE
-    d->UpdateWriteCoverage(addrWritten, writeSize); // NOT THREAD SAFE
-
-    PDEBUG("Wrote %d bytes @ %p\n", writeSize, (VOID *) addrWritten);
+    #else
+    manager.WriteObject(addrWritten, writeSize);
+    #endif
 }
 
 VOID Instruction(INS ins, VOID *v) 
@@ -184,40 +131,7 @@ VOID Image(IMG img, VOID *v)
 
 VOID Fini(INT32 code, VOID *v)
 {
-    unordered_map<ADDRINT,ObjectData*> seen;
-    unordered_map<ADDRINT,ObjectData*>::iterator liveObjectsIter, seenIter;
-    unordered_map<size_t,vector<ObjectData*>>::iterator totalObjectsIter;
-    vector<ObjectData*> *curAddrs;
-    vector<ObjectData*>::iterator curAddrsIter;
-    ObjectData *d;
-
-    // Move objects that were never freed to totalObjects
-    //
-    for (liveObjectsIter = liveObjects.begin(); liveObjectsIter != liveObjects.end(); liveObjectsIter++)
-    {
-        d = liveObjectsIter->second;
-        seenIter = seen.find(d->GetAddr());
-        if (seenIter == seen.end()) // If this object hasn't been seen yet, then add it to totalObjects
-        {
-            seen.insert(make_pair<ADDRINT,ObjectData*>(d->GetAddr(), d));
-            totalObjects[d->GetSize()].push_back(d);
-        }
-    }
-
-    // Print out all data
-    //
-    for (totalObjectsIter = totalObjects.begin(); totalObjectsIter != totalObjects.end(); totalObjectsIter++)
-    {
-        curAddrs = &(totalObjectsIter->second);
-        traceFile << "OBJECT SIZE: " << totalObjectsIter->first << endl << 
-                        "========================================" << endl;
-        for (curAddrsIter = curAddrs->begin(); curAddrsIter != curAddrs->end(); curAddrsIter++)
-        {
-            // We must output data to a file instead of stdout or stderr because stdout and stderr have been closed at this point
-            //
-            traceFile << **curAddrsIter << endl;
-        }
-    }
+    traceFile << manager << endl;
 }
 
 INT32 Usage() 

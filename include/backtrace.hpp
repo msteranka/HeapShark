@@ -48,15 +48,9 @@ class Backtrace
             PIN_UnlockClient();
         }
 
-        pair<string,INT32> *GetTrace()
-        {
-            return trace;
-        }
+        pair<string,INT32> *GetTrace() { return trace; }
 
-        INT32 GetDepth()
-        {
-            return depth;
-        }
+        INT32 GetDepth() { return depth; }
 
         Backtrace &operator=(const Backtrace &b)
         {
