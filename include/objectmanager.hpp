@@ -109,8 +109,6 @@ ostream& operator<<(ostream &os, ObjectManager& manager)
     vector<ObjectData*>::iterator curAddrsIter;
     ObjectData *d;
 
-    os << "HEY FUCKWAD" << endl;
-
     liveObjects = *manager.GetLiveObjects();
     totalObjects = *manager.GetTotalObjects();
 
