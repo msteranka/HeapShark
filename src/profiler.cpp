@@ -26,7 +26,7 @@
 using namespace std;
 
 static ofstream traceFile;
-static KNOB<string> knobOutputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "profiler.out", "specify profiling file name");
+static KNOB<string> knobOutputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "data.json", "specify profiling file name");
 static ObjectManager manager;
 static ADDRINT cachedSize;
 static Backtrace cachedTrace;
@@ -131,7 +131,7 @@ VOID Image(IMG img, VOID *v)
 
 VOID Fini(INT32 code, VOID *v)
 {
-    traceFile << manager << endl;
+    traceFile << manager;
 }
 
 INT32 Usage() 

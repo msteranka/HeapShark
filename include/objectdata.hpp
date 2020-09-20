@@ -115,19 +115,24 @@ class ObjectData
 
 ostream& operator<<(ostream& os, ObjectData& data) 
 {
-    pair<double,double> coverage = data.CalculateCoverage();
-    pair<Backtrace,Backtrace> trace = data.GetTrace();
-    os << hex << data.GetAddr() << dec << ":" << endl <<
-                 "\tnumReads: " << data.GetNumReads() << endl <<
-                 "\tnumWrites: " << data.GetNumWrites() << endl <<
-                 "\tbytesRead = " << data.GetBytesRead() << endl <<
-                 "\tbytesWritten = " << data.GetBytesWritten() << endl <<
-                 "\tRead Factor = " << data.GetReadFactor() << endl <<
-                 "\tWrite Factor = " << data.GetWriteFactor() << endl <<
-                 "\tRead Coverage = " << coverage.first << endl << 
-                 "\tWrite Coverage = " << coverage.second << endl <<
-                 "malloc Backtrace:" << endl << trace.first << endl <<
-                 "free Backtrace:" << endl << trace.second << endl;
+    pair<double,double> coverage;
+    pair<Backtrace,Backtrace> trace;
+
+    coverage = data.CalculateCoverage();
+    trace = data.GetTrace();
+
+    os << "\t\t{" << endl <<
+            "\t\t\t\"address\" : " << data.GetAddr() << "," << endl << 
+            "\t\t\t\"size\" : " << data.GetSize() << "," << endl <<
+            "\t\t\t\"numReads\" : " << data.GetNumReads() << "," << endl <<
+            "\t\t\t\"numWrites\" : " << data.GetNumWrites() << "," << endl <<
+            "\t\t\t\"bytesRead\" : " << data.GetBytesRead() << "," << endl <<
+            "\t\t\t\"bytesWritten\" : " << data.GetBytesWritten() << "," << endl <<
+            "\t\t\t\"readCoverage\" : " << coverage.first << "," << endl <<
+            "\t\t\t\"writeCoverage\" : " << coverage.second << "," << endl <<
+            "\t\t\t\"mallocBacktrace\" : " << trace.first << "," << endl <<
+            "\t\t\t\"freeBacktrace\" : " << trace.second << endl <<
+            "\t\t}";
 
     return os;
 }

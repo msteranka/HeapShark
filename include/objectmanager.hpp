@@ -42,7 +42,7 @@ class ObjectManager
 
             d = it->second;
             d->SetFreeTrace(ctxt);
-            totalObjects[d->GetSize()].push_back(d); // Insert the ObjectData into totalObjects
+            totalObjects.push_back(d); // Insert the ObjectData into totalObjects
 
             startAddr = d->GetAddr();
             endAddr = startAddr + d->GetSize();
@@ -92,53 +92,34 @@ class ObjectManager
 
         unordered_map<ADDRINT,ObjectData*> *GetLiveObjects() { return &liveObjects; }
 
-        unordered_map<UINT32, vector<ObjectData*>> *GetTotalObjects() { return &totalObjects; }
+        vector<ObjectData*> *GetTotalObjects() { return &totalObjects; }
         
     private:
         unordered_map<ADDRINT,ObjectData*> liveObjects;
-        unordered_map<UINT32, vector<ObjectData*>> totalObjects;
+        vector<ObjectData*> totalObjects;
 };
 
 ostream& operator<<(ostream &os, ObjectManager& manager) 
 {
-    unordered_map<ADDRINT,ObjectData*> seen, liveObjects;
-    unordered_map<ADDRINT,ObjectData*>::iterator liveObjectsIter, seenIter;
-    unordered_map<UINT32,vector<ObjectData*>>::iterator totalObjectsIter;
-    unordered_map<UINT32, vector<ObjectData*>> totalObjects;
-    vector<ObjectData*> *curAddrs;
-    vector<ObjectData*>::iterator curAddrsIter;
-    ObjectData *d;
-
-    liveObjects = *manager.GetLiveObjects();
-    totalObjects = *manager.GetTotalObjects();
+    unordered_map<ADDRINT,ObjectData*> *liveObjects;
+    vector<ObjectData*> *totalObjects;
+    vector<ObjectData*>::iterator totalIt;
 
     // Move objects that were never freed to totalObjects
     //
-    for (liveObjectsIter = liveObjects.begin(); liveObjectsIter != liveObjects.end(); liveObjectsIter++)
+    liveObjects = manager.GetLiveObjects();
+    for (auto it = liveObjects->begin(); it != liveObjects->end(); it++)
     {
-        d = liveObjectsIter->second;
-        seenIter = seen.find(d->GetAddr());
-        if (seenIter == seen.end()) // If this object hasn't been seen yet, then add it to totalObjects
-        {
-            seen.insert(make_pair<ADDRINT,ObjectData*>(d->GetAddr(), d));
-            totalObjects[d->GetSize()].push_back(d);
-        }
+        manager.RemoveObject(it->first, nullptr);
     }
 
-    // Print out all data
-    //
-    for (totalObjectsIter = totalObjects.begin(); totalObjectsIter != totalObjects.end(); totalObjectsIter++)
+    totalObjects = manager.GetTotalObjects();
+    os << "{" << endl << "\t\"objects\" : [" << endl;
+    for (totalIt = totalObjects->begin(); totalIt != totalObjects->end() - 1; totalIt++)
     {
-        curAddrs = &(totalObjectsIter->second);
-        os << "OBJECT SIZE: " << totalObjectsIter->first << endl << 
-                        "========================================" << endl;
-        for (curAddrsIter = curAddrs->begin(); curAddrsIter != curAddrs->end(); curAddrsIter++)
-        {
-            // We must output data to a file instead of stdout or stderr because stdout and stderr have been closed at this point
-            //
-            os << **curAddrsIter << endl;
-        }
+        os << **totalIt << "," << endl;
     }
+    os << **totalIt << endl << "\t]" << endl << "}";
 
     return os;
 }

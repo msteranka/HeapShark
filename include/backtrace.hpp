@@ -6,6 +6,8 @@
 
 using namespace std;
 
+static const INT32 maxDepth = 3;
+
 class Backtrace 
 {
     public:
@@ -23,6 +25,11 @@ class Backtrace
             // the stack frame for malloc/free
             //
             VOID *buf[maxDepth + 1];
+
+            if (ctxt == nullptr)
+            {
+                return;
+            }
         
             // Pin requires us to call Pin_LockClient() before calling PIN_Backtrace
             // and PIN_GetSourceLocation
@@ -70,39 +77,41 @@ class Backtrace
         //
         pair<string,INT32> *trace;
         INT32 depth;
-        static const INT32 maxDepth = 3;
 };
 
 ostream& operator<<(ostream& os, Backtrace& bt)
 {
-
     pair<string,INT32> *t;
+    INT32 i;
 
     t = bt.GetTrace();
-    if (bt.GetDepth() == 0)
-    {
-        os << "N/A" << endl;
-        return os;
-    }
 
-    for (INT32 i = 0; i < bt.GetDepth(); i++)
+    os << "{" << endl;
+
+    for (i = 0; i < maxDepth - 1; i++)
     {
         // If PIN_GetSourceLocation failed to map the IP to a 
         // file + line number
         //
         if (t[i].first == "")
         {
-            os << "(NIL)";
+            os << "\t\t\t\t\"" << i << "\" : \"\"," << endl;
         }
-        else
-        {
-            os << t[i].first << ":" << t[i].second;
-        }
-        if (i < bt.GetDepth() - 1)
-        {
-            os << endl;
+        else {
+            os << "\t\t\t\t\"" << i << "\" : \"" << t[i].first << ":" 
+                << t[i].second << "\"," << endl;
         }
     }
+
+    if (t[i].first == "")
+    {
+        os << "\t\t\t\t\"" << i << "\" : \"\"" << endl << "\t\t\t}";
+    }
+    else {
+        os << "\t\t\t\t\"" << i << "\" : \"" << t[i].first << ":" 
+            << t[i].second << "\"" << endl << "\t\t\t}";
+    }
+
     return os;
 }
 
