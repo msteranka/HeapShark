@@ -44,13 +44,13 @@ VOID ThreadFini(THREADID threadid, const CONTEXT* ctxt, INT32 code, VOID* v)
 // Function arguments and backtrace can only be accessed at the function entry point
 // Thus, we must insert a routine before malloc and cache these values
 //
-VOID MallocBefore(CONTEXT *ctxt, ADDRINT size)
+VOID MallocBefore(THREADID threadid, CONTEXT* ctxt, ADDRINT size)
 {
     cachedTrace.SetTrace(ctxt); // NOT THREAD SAFE!
     cachedSize = size; // NOT THREAD SAFE!
 }
 
-VOID MallocAfter(ADDRINT retVal)
+VOID MallocAfter(THREADID threadid, ADDRINT retVal)
 {
     if ((VOID *) retVal == nullptr) // Check for success since we don't want to track null pointers
     {
@@ -60,13 +60,13 @@ VOID MallocAfter(ADDRINT retVal)
     PDEBUG("malloc(%u) = %p\n", (UINT32) cachedSize, (VOID *) retVal);
 }
 
-VOID FreeHook(CONTEXT *ctxt, ADDRINT ptr) 
+VOID FreeHook(THREADID threadid, CONTEXT* ctxt, ADDRINT ptr)
 {
     manager.RemoveObject(ptr, ctxt);
     PDEBUG("free(%p)\n", (VOID *) ptr);
 }
 
-VOID ReadsMem(ADDRINT addrRead, UINT32 readSize) 
+VOID ReadsMem(THREADID threadid, ADDRINT addrRead, UINT32 readSize)
 {
     #ifdef PROF_DEBUG
     if(manager.ReadObject(addrRead, readSize))
@@ -78,7 +78,7 @@ VOID ReadsMem(ADDRINT addrRead, UINT32 readSize)
     #endif
 }
 
-VOID WritesMem(ADDRINT addrWritten, UINT32 writeSize) 
+VOID WritesMem(THREADID threadid, ADDRINT addrWritten, UINT32 writeSize)
 {
     #ifdef PROF_DEBUG
     if(manager.WriteObject(addrWritten, writeSize))
@@ -95,6 +95,7 @@ VOID Instruction(INS ins, VOID *v)
     if (INS_IsMemoryRead(ins)) 
     {
         INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR) ReadsMem, // Intercept all read instructions with ReadsMem
+                        IARG_THREAD_ID,
                         IARG_MEMORYREAD_EA,
                         IARG_MEMORYREAD_SIZE,
                         IARG_END);
@@ -103,6 +104,7 @@ VOID Instruction(INS ins, VOID *v)
     if (INS_IsMemoryWrite(ins)) 
     {
         INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR) WritesMem, // Intercept all write instructions with WritesMem
+                        IARG_THREAD_ID,
                         IARG_MEMORYWRITE_EA,
                         IARG_MEMORYWRITE_SIZE,
                         IARG_END);
@@ -118,10 +120,12 @@ VOID Image(IMG img, VOID *v)
     {
         RTN_Open(rtn);
         RTN_InsertCall(rtn, IPOINT_BEFORE, (AFUNPTR) MallocBefore, // Hook calls to malloc with MallocBefore
+                        IARG_THREAD_ID,
                         IARG_CONST_CONTEXT,
                         IARG_FUNCARG_ENTRYPOINT_VALUE, 
                         0, IARG_END);
         RTN_InsertCall(rtn, IPOINT_AFTER, (AFUNPTR) MallocAfter, // Hook calls to malloc with MallocAfter
+                        IARG_THREAD_ID,
                         IARG_FUNCRET_EXITPOINT_VALUE, 
                         IARG_END);
         RTN_Close(rtn);
@@ -132,6 +136,7 @@ VOID Image(IMG img, VOID *v)
     {
         RTN_Open(rtn);
         RTN_InsertCall(rtn, IPOINT_BEFORE, (AFUNPTR) FreeHook, // Hook calls to free with FreeHook
+                        IARG_THREAD_ID,
                         IARG_CONST_CONTEXT, 
                         IARG_FUNCARG_ENTRYPOINT_VALUE, 
                         0, IARG_END);
