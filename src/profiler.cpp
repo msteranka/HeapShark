@@ -31,6 +31,16 @@ static ObjectManager manager;
 static ADDRINT cachedSize;
 static Backtrace cachedTrace;
 
+VOID ThreadStart(THREADID threadid, CONTEXT* ctxt, INT32 flags, VOID* v)
+{
+    // This will be called each time a thread is created.
+}
+
+VOID ThreadFini(THREADID threadid, const CONTEXT* ctxt, INT32 code, VOID* v)
+{
+    // This will be called each time a thread is destroyed.
+}
+
 // Function arguments and backtrace can only be accessed at the function entry point
 // Thus, we must insert a routine before malloc and cache these values
 //
@@ -151,6 +161,8 @@ int main(int argc, char *argv[])
     traceFile.setf(ios::showbase);
     IMG_AddInstrumentFunction(Image, 0);
     INS_AddInstrumentFunction(Instruction, 0);
+    PIN_AddThreadStartFunction(ThreadStart, 0);
+    PIN_AddThreadFiniFunction(ThreadFini, 0);
     PIN_AddFiniFunction(Fini, 0);
     PIN_StartProgram();
 }
