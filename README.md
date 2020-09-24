@@ -6,7 +6,7 @@ A memory profiler for analyzing allocations that can be replaced with stack allo
 
 Build the Pintool given the path to Pin:
 
-    $ make PIN\_ROOT=path/to/Pin obj-intel64/profiler.so 
+    $ make PIN_ROOT=path/to/Pin obj-intel64/profiler.so 
 
 Run the Pintool on a given executable:
 
