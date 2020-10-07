@@ -36,8 +36,8 @@ static Backtrace cachedTrace;
 //
 VOID MallocBefore(CONTEXT *ctxt, ADDRINT size)
 {
-    cachedTrace.SetTrace(ctxt); // NOT THREAD SAFE!
-    cachedSize = size; // NOT THREAD SAFE!
+    cachedTrace.SetTrace(ctxt);
+    cachedSize = size;
 }
 
 VOID MallocAfter(ADDRINT retVal)
@@ -47,37 +47,34 @@ VOID MallocAfter(ADDRINT retVal)
         return;
     }
     manager.AddObject(retVal, (UINT32) cachedSize, cachedTrace);
-    PDEBUG("malloc(%u) = %p\n", (UINT32) cachedSize, (VOID *) retVal);
+    PDEBUG("malloc (%u) = %p\n", (UINT32) cachedSize, (VOID *) retVal);
 }
 
 VOID FreeHook(CONTEXT *ctxt, ADDRINT ptr) 
 {
+    // Value of sizeThreshold is somewhat arbitrary, just using 2^20 for now
+    //
+    static const UINT32 sizeThreshold = 1048576;
     manager.RemoveObject(ptr, ctxt);
+
+    // Write out all data to output file every sizeThreshold in the event that the 
+    // application makes a lot of allocations
+    //
+    if (manager.GetTotalObjects()->size() >= sizeThreshold)
+    {
+        manager.ClearDeadObjects(traceFile, sizeThreshold);
+    }
     PDEBUG("free(%p)\n", (VOID *) ptr);
 }
 
 VOID ReadsMem(ADDRINT addrRead, UINT32 readSize) 
 {
-    #ifdef PROF_DEBUG
-    if(manager.ReadObject(addrRead, readSize))
-    {
-        PDEBUG("Read %d bytes @ %p\n", readSize, (VOID *) addrRead);
-    }
-    #else
     manager.ReadObject(addrRead, readSize);
-    #endif
 }
 
 VOID WritesMem(ADDRINT addrWritten, UINT32 writeSize) 
 {
-    #ifdef PROF_DEBUG
-    if(manager.WriteObject(addrWritten, writeSize))
-    {
-        PDEBUG("Wrote %d bytes @ %p\n", writeSize, (VOID *) addrWritten);
-    }
-    #else
     manager.WriteObject(addrWritten, writeSize);
-    #endif
 }
 
 VOID Instruction(INS ins, VOID *v) 
@@ -131,7 +128,18 @@ VOID Image(IMG img, VOID *v)
 
 VOID Fini(INT32 code, VOID *v)
 {
+    // << operator on ObjectManager only prints out freed objects, so
+    // we need to free all objects that are still live
+    //
+    manager.KillLiveObjects();
+
+    // NOTE: This will break the JSON format if FreeHook has printed out
+    // entries to traceFile and manager is empty
+    // Can manager ever be empty? i.e. Is it possible for an application to 
+    // ever terminate without any memory leaks?
+    //
     traceFile << manager;
+    traceFile << endl << "\t]" << endl << "}"; // Terminate JSON
 }
 
 INT32 Usage() 
@@ -149,6 +157,7 @@ int main(int argc, char *argv[])
     }
     traceFile.open(knobOutputFile.Value().c_str());
     traceFile.setf(ios::showbase);
+    traceFile << "{" << endl << "\t\"objects\" : [" << endl; // Begin JSON
     IMG_AddInstrumentFunction(Image, 0);
     INS_AddInstrumentFunction(Instruction, 0);
     PIN_AddFiniFunction(Fini, 0);

@@ -110,7 +110,6 @@ class ObjectData
         UINT32 size, numReads, numWrites, bytesRead, bytesWritten;
         vector<BOOL> readBitset, writeBitset;
         Backtrace mallocTrace, freeTrace;
-        static const CHAR initFiller = 0x0, readFiller = 0x1, writeFiller = 0x2;
 };
 
 ostream& operator<<(ostream& os, ObjectData& data) 

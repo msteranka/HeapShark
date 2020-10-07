@@ -7,10 +7,10 @@ with open(json_file, 'r') as f:
 
 for x in data['objects']:
     print('Address: ' + hex(x['address']))
-    print('Size: ' + str(x['size']))
+    print('\tSize: ' + str(x['size']))
     invocation = x['mallocBacktrace']['0']
     if invocation == "":
-        print('Invocation: (NIL)\n')
+        print('\tInvocation: (NIL)')
     else:
-        print('Invocation: ' + invocation + '\n')
+        print('\tInvocation: ' + invocation)
 
