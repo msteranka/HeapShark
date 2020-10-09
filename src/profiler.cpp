@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <unordered_map>
 #include "objectdata.hpp"
 #include "backtrace.hpp"
 #include "objectmanager.hpp"
@@ -28,17 +29,20 @@ using namespace std;
 static ofstream traceFile;
 static KNOB<string> knobOutputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "data.json", "specify profiling file name");
 static ObjectManager manager;
-static ADDRINT cachedSize;
-static Backtrace cachedTrace;
+
+static PIN_LOCK lock;
+static unordered_map<THREADID, pair<ADDRINT, Backtrace>> cache;
 
 VOID ThreadStart(THREADID threadid, CONTEXT* ctxt, INT32 flags, VOID* v)
 {
     // This will be called each time a thread is created.
+    // We don't need it at the moment but I'm leaving it in for future reference.
 }
 
 VOID ThreadFini(THREADID threadid, const CONTEXT* ctxt, INT32 code, VOID* v)
 {
     // This will be called each time a thread is destroyed.
+    // We don't need it at the moment but I'm leaving it in for future reference.
 }
 
 // Function arguments and backtrace can only be accessed at the function entry point
@@ -46,8 +50,11 @@ VOID ThreadFini(THREADID threadid, const CONTEXT* ctxt, INT32 code, VOID* v)
 //
 VOID MallocBefore(THREADID threadid, CONTEXT* ctxt, ADDRINT size)
 {
-    cachedTrace.SetTrace(ctxt); // NOT THREAD SAFE!
-    cachedSize = size; // NOT THREAD SAFE!
+    PIN_GetLock(&lock, threadid);
+    Backtrace b;
+    b.SetTrace(ctxt);
+    cache[threadid] = make_pair(size, b);
+    PIN_ReleaseLock(&lock);
 }
 
 VOID MallocAfter(THREADID threadid, ADDRINT retVal)
@@ -56,18 +63,23 @@ VOID MallocAfter(THREADID threadid, ADDRINT retVal)
     {
         return;
     }
-    manager.AddObject(retVal, (UINT32) cachedSize, cachedTrace);
-    PDEBUG("malloc(%u) = %p\n", (UINT32) cachedSize, (VOID *) retVal);
+    PIN_GetLock(&lock, threadid);
+    manager.AddObject(retVal, (UINT32) cache[threadid].first, cache[threadid].second);
+    PDEBUG("malloc(%u) = %p\n", (UINT32) cache[threadid].first, (VOID *) cache[threadid].second);
+    PIN_ReleaseLock(&lock);
 }
 
 VOID FreeHook(THREADID threadid, CONTEXT* ctxt, ADDRINT ptr)
 {
+    PIN_GetLock(&lock, threadid);
     manager.RemoveObject(ptr, ctxt);
     PDEBUG("free(%p)\n", (VOID *) ptr);
+    PIN_ReleaseLock(&lock);
 }
 
 VOID ReadsMem(THREADID threadid, ADDRINT addrRead, UINT32 readSize)
 {
+    PIN_GetLock(&lock, threadid);
     #ifdef PROF_DEBUG
     if(manager.ReadObject(addrRead, readSize))
     {
@@ -76,10 +88,12 @@ VOID ReadsMem(THREADID threadid, ADDRINT addrRead, UINT32 readSize)
     #else
     manager.ReadObject(addrRead, readSize);
     #endif
+    PIN_ReleaseLock(&lock);
 }
 
 VOID WritesMem(THREADID threadid, ADDRINT addrWritten, UINT32 writeSize)
 {
+    PIN_GetLock(&lock, threadid);
     #ifdef PROF_DEBUG
     if(manager.WriteObject(addrWritten, writeSize))
     {
@@ -88,6 +102,7 @@ VOID WritesMem(THREADID threadid, ADDRINT addrWritten, UINT32 writeSize)
     #else
     manager.WriteObject(addrWritten, writeSize);
     #endif
+    PIN_ReleaseLock(&lock);
 }
 
 VOID Instruction(INS ins, VOID *v) 
@@ -157,6 +172,7 @@ INT32 Usage()
 
 int main(int argc, char *argv[]) 
 {
+    PIN_InitLock(&lock);
     PIN_InitSymbols();
     if (PIN_Init(argc, argv)) 
     {
