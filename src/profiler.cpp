@@ -1,4 +1,4 @@
-#include "pin.h"
+#include "pin.H"
 #include <fstream>
 #include <iostream>
 #include <utility>
@@ -29,7 +29,6 @@ using namespace std;
 static ofstream traceFile;
 static KNOB<string> knobOutputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "data.json", "specify profiling file name");
 static ObjectManager manager;
-
 static PIN_LOCK lock;
 static unordered_map<THREADID, pair<ADDRINT, Backtrace>> cache;
 
@@ -50,13 +49,13 @@ VOID ThreadFini(THREADID threadid, const CONTEXT* ctxt, INT32 code, VOID* v)
 //
 VOID MallocBefore(THREADID threadid, CONTEXT* ctxt, ADDRINT size)
 {
-    std::cout << "Locking from thread " << threadid << " before a malloc..." << std::endl;
-    PIN_GetLock(&lock, threadid);
+    PIN_GetLock(&lock, threadid + 1);
+    PDEBUG("Locking from thread %lu before a malloc...\n", threadid);
     Backtrace b;
     b.SetTrace(ctxt);
     cache[threadid] = make_pair(size, b);
+    PDEBUG("Unlocked from thread %lu.\n", threadid);
     PIN_ReleaseLock(&lock);
-    std::cout << "Unlocked from thread " << threadid << "." << std::endl;
 }
 
 VOID MallocAfter(THREADID threadid, ADDRINT retVal)
@@ -66,54 +65,38 @@ VOID MallocAfter(THREADID threadid, ADDRINT retVal)
         return;
     }
 
-    std::cout << "Locking from thread " << threadid << " after a malloc..." << std::endl;
-    PIN_GetLock(&lock, threadid);
+    PIN_GetLock(&lock, threadid + 1);
+    PDEBUG("Locking from thread %lu after a malloc...\n", threadid);
     manager.AddObject(retVal, (UINT32) cache[threadid].first, cache[threadid].second);
-    PDEBUG("malloc(%u) = %p\n", (UINT32) cache[threadid].first, (VOID *) cache[threadid].second);
+    PDEBUG("Unlocked from thread %lu.\n", threadid);
     PIN_ReleaseLock(&lock);
-    std::cout << "Unlocked from thread " << threadid << "." << std::endl;
 }
 
 VOID FreeHook(THREADID threadid, CONTEXT* ctxt, ADDRINT ptr)
 {
-    std::cout << "Locking from thread " << threadid << " on a free..." << std::endl;
-    PIN_GetLock(&lock, threadid);
+    PIN_GetLock(&lock, threadid + 1);
+    PDEBUG("Locking from thread %lu on a free...\n", threadid);
     manager.RemoveObject(ptr, ctxt);
-    PDEBUG("free(%p)\n", (VOID *) ptr);
+    PDEBUG("Unlocked from thread %lu.\n", threadid);
     PIN_ReleaseLock(&lock);
-    std::cout << "Unlocked from thread " << threadid << "." << std::endl;
 }
 
 VOID ReadsMem(THREADID threadid, ADDRINT addrRead, UINT32 readSize)
 {
-    std::cout << "Locking from thread " << threadid << " on a read..." << std::endl;
-    PIN_GetLock(&lock, threadid);
-    #ifdef PROF_DEBUG
-    if(manager.ReadObject(addrRead, readSize))
-    {
-        PDEBUG("Read %d bytes @ %p\n", readSize, (VOID *) addrRead);
-    }
-    #else
+    PIN_GetLock(&lock, threadid + 1);
+    PDEBUG("Locking from thread %lu on a read...\n", threadid);
     manager.ReadObject(addrRead, readSize);
-    #endif
+    PDEBUG("Unlocked from thread %lu.\n", threadid);
     PIN_ReleaseLock(&lock);
-    std::cout << "Unlocked from thread " << threadid << "." << std::endl;
 }
 
 VOID WritesMem(THREADID threadid, ADDRINT addrWritten, UINT32 writeSize)
 {
-    std::cout << "Locking from thread " << threadid << " on a write." << std::endl;
-    PIN_GetLock(&lock, threadid);
-    #ifdef PROF_DEBUG
-    if(manager.WriteObject(addrWritten, writeSize))
-    {
-        PDEBUG("Wrote %d bytes @ %p\n", writeSize, (VOID *) addrWritten);
-    }
-    #else
+    PIN_GetLock(&lock, threadid + 1);
+    PDEBUG("Locking from thread %lu on a write.\n", threadid);
     manager.WriteObject(addrWritten, writeSize);
-    #endif
+    PDEBUG("Unlocked from thread %lu.\n", threadid);
     PIN_ReleaseLock(&lock);
-    std::cout << "Unlocked from thread " << threadid << "." << std::endl;
 }
 
 VOID Instruction(INS ins, VOID *v) 
@@ -184,11 +167,11 @@ INT32 Usage()
 int main(int argc, char *argv[]) 
 {
     PIN_InitLock(&lock);
-    PIN_InitSymbols();
     if (PIN_Init(argc, argv)) 
     {
         return Usage();
     }
+    PIN_InitSymbols();
     traceFile.open(knobOutputFile.Value().c_str());
     traceFile.setf(ios::showbase);
     IMG_AddInstrumentFunction(Image, 0);

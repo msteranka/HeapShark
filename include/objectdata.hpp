@@ -17,40 +17,34 @@ class ObjectData
             numReads(0),
             numWrites(0),
             bytesRead(0),
-            bytesWritten(0)
-        {
-            coverageBuf = new CHAR[size];
-            memset(coverageBuf, initFiller, size);
-        }
+            bytesWritten(0),
+            readBitset(size, 0),
+            writeBitset(size, 0)
+        { }
 
         pair<double,double> CalculateCoverage()
         {
             double readCoverage, writeCoverage;
-            UINT32 read, written;
+            UINT32 bitsRead, bitsWritten;
 
-            read = written = 0;
+            bitsRead = bitsWritten = 0;
 
             // Calculate read and write coverage
             // NOTE: coverage can be misleading on structs/classes that require extra space for alignment
             //
             for (UINT32 i = 0; i < size; i++)
             {
-                switch(coverageBuf[i]) {
-                    case readFiller | writeFiller:
-                        read++;
-                        written++;
-                        break;
-                    case readFiller:
-                        read++;
-                        break;
-                    case writeFiller:
-                        written++;
-                        break;
-
+                if (readBitset[i])
+                {
+                    bitsRead++;
+                }
+                if (writeBitset[i])
+                {
+                    bitsWritten++;
                 }
             }
-            readCoverage = (double) read / size;
-            writeCoverage = (double) written / size;
+            readCoverage = (double) bitsRead / size;
+            writeCoverage = (double) bitsWritten / size;
             return make_pair<double,double>(readCoverage, writeCoverage);
         }
 
@@ -84,24 +78,24 @@ class ObjectData
 
         VOID UpdateReadCoverage(ADDRINT addrRead, UINT32 readSize)
         {
-            CHAR *fillAddr;
+            ADDRINT offset;
 
-            // Write to coverageBuf at the same offset the object is being read
+            // Write to readBitset at the same offset the object is being read
             //
-            fillAddr = coverageBuf + (addrRead - addr);
-            for (UINT32 i = 0; i < readSize; i++)
+            offset = addrRead - addr;
+            for (ADDRINT i = offset; i < offset + readSize; i++)
             {
-                fillAddr[i] |= readFiller;
+                readBitset[i] = 1;
             }
         }
 
         VOID UpdateWriteCoverage(ADDRINT addrWritten, UINT32 writeSize)
         {
-            CHAR *fillAddr;
-            fillAddr = coverageBuf + (addrWritten - addr);
-            for (UINT32 i = 0; i < writeSize; i++)
+            ADDRINT offset;
+            offset = addrWritten - addr;
+            for (ADDRINT i = offset; i < offset + writeSize; i++)
             {
-                fillAddr[i] |= writeFiller;
+                writeBitset[i] = 1;
             }
         }
 
@@ -113,9 +107,8 @@ class ObjectData
     private:
         ADDRINT addr;
         UINT32 size, numReads, numWrites, bytesRead, bytesWritten;
-        CHAR *coverageBuf;
+        vector<BOOL> readBitset, writeBitset;
         Backtrace mallocTrace, freeTrace;
-        static const CHAR initFiller = 0x0, readFiller = 0x1, writeFiller = 0x2;
 };
 
 ostream& operator<<(ostream& os, ObjectData& data) 
