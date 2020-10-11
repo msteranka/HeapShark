@@ -1,4 +1,4 @@
-#include "pin.H"
+#include "pin.h"
 #include <fstream>
 #include <iostream>
 #include <utility>
@@ -50,11 +50,13 @@ VOID ThreadFini(THREADID threadid, const CONTEXT* ctxt, INT32 code, VOID* v)
 //
 VOID MallocBefore(THREADID threadid, CONTEXT* ctxt, ADDRINT size)
 {
+    std::cout << "Locking from thread " << threadid << " before a malloc..." << std::endl;
     PIN_GetLock(&lock, threadid);
     Backtrace b;
     b.SetTrace(ctxt);
     cache[threadid] = make_pair(size, b);
     PIN_ReleaseLock(&lock);
+    std::cout << "Unlocked from thread " << threadid << "." << std::endl;
 }
 
 VOID MallocAfter(THREADID threadid, ADDRINT retVal)
@@ -63,22 +65,28 @@ VOID MallocAfter(THREADID threadid, ADDRINT retVal)
     {
         return;
     }
+
+    std::cout << "Locking from thread " << threadid << " after a malloc..." << std::endl;
     PIN_GetLock(&lock, threadid);
     manager.AddObject(retVal, (UINT32) cache[threadid].first, cache[threadid].second);
     PDEBUG("malloc(%u) = %p\n", (UINT32) cache[threadid].first, (VOID *) cache[threadid].second);
     PIN_ReleaseLock(&lock);
+    std::cout << "Unlocked from thread " << threadid << "." << std::endl;
 }
 
 VOID FreeHook(THREADID threadid, CONTEXT* ctxt, ADDRINT ptr)
 {
+    std::cout << "Locking from thread " << threadid << " on a free..." << std::endl;
     PIN_GetLock(&lock, threadid);
     manager.RemoveObject(ptr, ctxt);
     PDEBUG("free(%p)\n", (VOID *) ptr);
     PIN_ReleaseLock(&lock);
+    std::cout << "Unlocked from thread " << threadid << "." << std::endl;
 }
 
 VOID ReadsMem(THREADID threadid, ADDRINT addrRead, UINT32 readSize)
 {
+    std::cout << "Locking from thread " << threadid << " on a read..." << std::endl;
     PIN_GetLock(&lock, threadid);
     #ifdef PROF_DEBUG
     if(manager.ReadObject(addrRead, readSize))
@@ -89,10 +97,12 @@ VOID ReadsMem(THREADID threadid, ADDRINT addrRead, UINT32 readSize)
     manager.ReadObject(addrRead, readSize);
     #endif
     PIN_ReleaseLock(&lock);
+    std::cout << "Unlocked from thread " << threadid << "." << std::endl;
 }
 
 VOID WritesMem(THREADID threadid, ADDRINT addrWritten, UINT32 writeSize)
 {
+    std::cout << "Locking from thread " << threadid << " on a write." << std::endl;
     PIN_GetLock(&lock, threadid);
     #ifdef PROF_DEBUG
     if(manager.WriteObject(addrWritten, writeSize))
@@ -103,6 +113,7 @@ VOID WritesMem(THREADID threadid, ADDRINT addrWritten, UINT32 writeSize)
     manager.WriteObject(addrWritten, writeSize);
     #endif
     PIN_ReleaseLock(&lock);
+    std::cout << "Unlocked from thread " << threadid << "." << std::endl;
 }
 
 VOID Instruction(INS ins, VOID *v) 
