@@ -90,6 +90,41 @@ class ObjectManager
             return true;
         }
 
+        // Move objects that were never freed to totalObjects
+        // Only reason we even need this is because we may have to print out data
+        // before the application has ended if there are many allocations
+        // 
+        VOID KillLiveObjects()
+        {
+            unordered_map<ADDRINT,ObjectData*>::iterator it;
+
+            while (liveObjects.size() > 0)
+            {
+                it = liveObjects.begin();
+                // Remember that liveObjects contains pointers within objects as well,
+                // so all we really need to free is the base address of the object
+                //
+                RemoveObject(it->second->GetAddr(), nullptr);
+            }
+        }
+
+        // Write out contents of totalObjects to os 
+        //
+        VOID ClearDeadObjects(ostream& os, UINT32 sizeThreshold)
+        {
+            vector<ObjectData*>::iterator it;
+
+            while (totalObjects.size() > 0)
+            {
+                // Written out in reverse order to take advantage of pop_back
+                //
+                it = totalObjects.end() - 1;
+                os << **it << "," << endl;
+                delete *it;
+                totalObjects.pop_back();
+            }
+        }
+
         unordered_map<ADDRINT,ObjectData*> *GetLiveObjects() { return &liveObjects; }
 
         vector<ObjectData*> *GetTotalObjects() { return &totalObjects; }
@@ -101,25 +136,15 @@ class ObjectManager
 
 ostream& operator<<(ostream &os, ObjectManager& manager) 
 {
-    unordered_map<ADDRINT,ObjectData*> *liveObjects;
     vector<ObjectData*> *totalObjects;
     vector<ObjectData*>::iterator totalIt;
 
-    // Move objects that were never freed to totalObjects
-    //
-    liveObjects = manager.GetLiveObjects();
-    for (auto it = liveObjects->begin(); it != liveObjects->end(); it++)
-    {
-        manager.RemoveObject(it->first, nullptr);
-    }
-
     totalObjects = manager.GetTotalObjects();
-    os << "{" << endl << "\t\"objects\" : [" << endl;
     for (totalIt = totalObjects->begin(); totalIt != totalObjects->end() - 1; totalIt++)
     {
         os << **totalIt << "," << endl;
     }
-    os << **totalIt << endl << "\t]" << endl << "}";
+    os << **totalIt;
 
     return os;
 }

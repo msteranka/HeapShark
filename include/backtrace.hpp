@@ -14,9 +14,13 @@ class Backtrace
         // A Backtrace is initialized with the maximum number of stack frames
         // that it will go down
         //
-        Backtrace() : depth(0)
+        Backtrace()
         {
-            trace = new pair<string,INT32>[maxDepth];
+            for (INT32 i = 0; i < maxDepth; i++)
+            {
+                trace[i].first = "";
+                trace[i].second = 0;
+            }
         }
 
         VOID SetTrace(CONTEXT *ctxt)
@@ -25,6 +29,7 @@ class Backtrace
             // the stack frame for malloc/free
             //
             VOID *buf[maxDepth + 1];
+            INT32 depth;
 
             if (ctxt == nullptr)
             {
@@ -57,17 +62,13 @@ class Backtrace
 
         pair<string,INT32> *GetTrace() { return trace; }
 
-        INT32 GetDepth() { return depth; }
-
         Backtrace &operator=(const Backtrace &b)
         {
-            for (INT32 i = 0; i < b.depth; i++)
+            for (INT32 i = 0; i < maxDepth; i++)
             {
                 trace[i].first = b.trace[i].first;
                 trace[i].second = b.trace[i].second;
             }
-            depth = b.depth;
-
             return *this;
         }
 
@@ -75,8 +76,7 @@ class Backtrace
         // trace consists of all invocation points of malloc/free, 
         // represented as a pairing of a file name and a line number
         //
-        pair<string,INT32> *trace;
-        INT32 depth;
+        pair<string,INT32> trace[maxDepth];
 };
 
 ostream& operator<<(ostream& os, Backtrace& bt)

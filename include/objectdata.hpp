@@ -4,6 +4,7 @@
 #include "pin.H"
 #include <iostream>
 #include <new>
+#include <vector>
 #include "backtrace.hpp"
 
 using namespace std;
