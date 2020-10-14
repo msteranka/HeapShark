@@ -29,7 +29,8 @@ using namespace std;
 static ofstream traceFile;
 static KNOB<string> knobOutputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "data.json", "specify profiling file name");
 static ObjectManager manager;
-static unordered_map<THREADID, pair<ADDRINT, Backtrace>> cache;
+static INT32 numThreads = 0;
+static TLS_KEY tls_key = INVALID_TLS_KEY; // Thread Local Storage
 static PIN_LOCK cacheLock; // CACHE_LOCK
 
 #ifdef PROF_DEBUG
@@ -38,14 +39,19 @@ static PIN_LOCK debugLock;
 
 VOID ThreadStart(THREADID threadId, CONTEXT *ctxt, INT32 flags, VOID* v)
 {
-    // This will be called each time a thread is created.
-    // We don't need it at the moment but I'm leaving it in for future reference.
+    numThreads++;
+    pair<ADDRINT, Backtrace>* threadCache = new pair<ADDRINT, Backtrace>();
+    if (PIN_SetThreadData(tls_key, threadCache, threadId) == FALSE)
+    {
+        cerr << "PIN_SetThreadData failed." << endl;
+        PIN_ExitProcess(1);
+    }
 }
 
 VOID ThreadFini(THREADID threadId, const CONTEXT *ctxt, INT32 code, VOID* v)
 {
-    // This will be called each time a thread is destroyed.
-    // We don't need it at the moment but I'm leaving it in for future reference.
+    pair<ADDRINT, Backtrace>* threadCache = static_cast<pair<ADDRINT, Backtrace>*>(PIN_GetThreadData(tls_key, threadId));
+    delete threadCache;
 }
 
 // Function arguments and backtrace can only be accessed at the function entry point
@@ -53,29 +59,20 @@ VOID ThreadFini(THREADID threadId, const CONTEXT *ctxt, INT32 code, VOID* v)
 //
 VOID MallocBefore(THREADID threadId, CONTEXT *ctxt, ADDRINT size)
 {
-    PDEBUG("Locking from thread %lu before a malloc...\n", threadId);
-    Backtrace b;
-    b.SetTrace(ctxt);
-    PIN_GetLock(&cacheLock, threadId); // CACHE_LOCK
-    cache[threadId] = make_pair(size, b);
-    PIN_ReleaseLock(&cacheLock);
-    PDEBUG("Unlocked from thread %lu.\n", threadId);
+    pair<ADDRINT, Backtrace>* threadCache = static_cast<pair<ADDRINT, Backtrace>*>(PIN_GetThreadData(tls_key, threadId));
+    threadCache->second.SetTrace(ctxt);
+    threadCache->first = size;
 }
 
 VOID MallocAfter(THREADID threadId, ADDRINT retVal)
 {
-    UINT32 size; // CACHE_LOCK
-    Backtrace b;
-    PDEBUG("Locking from thread %lu after a malloc...\n", threadId);
-    PIN_GetLock(&cacheLock, threadId);
-    size = (UINT32) cache[threadId].first;
-    b = cache[threadId].second;
-    PIN_ReleaseLock(&cacheLock);
+    pair<ADDRINT, Backtrace>* threadCache = static_cast<pair<ADDRINT, Backtrace>*>(PIN_GetThreadData(tls_key, threadId));
+    UINT32 size = threadCache->first;
+    Backtrace b = threadCache->second;
     // Check for success since we don't want to track null pointers
     //
     if ((VOID *) retVal == nullptr) { return; }
     manager.AddObject(retVal, size, b, threadId);
-    PDEBUG("Unlocked from thread %lu.\n", threadId);
 }
 
 VOID FreeHook(THREADID threadId, CONTEXT* ctxt, ADDRINT ptr)
@@ -83,8 +80,6 @@ VOID FreeHook(THREADID threadId, CONTEXT* ctxt, ADDRINT ptr)
     // Value of sizeThreshold is somewhat arbitrary, just using 2^20 for now
     //
     static const UINT32 sizeThreshold = 1048576;
-
-    PDEBUG("Locking from thread %lu on a free...\n", threadId);
 
     manager.RemoveObject(ptr, ctxt, threadId);
 
@@ -95,22 +90,16 @@ VOID FreeHook(THREADID threadId, CONTEXT* ctxt, ADDRINT ptr)
     {
         manager.ClearDeadObjects(traceFile);
     }
-
-    PDEBUG("Unlocked from thread %lu.\n", threadId);
 }
 
 VOID ReadsMem(THREADID threadId, ADDRINT addrRead, UINT32 readSize)
 {
-    PDEBUG("Locking from thread %lu on a read...\n", threadId);
     manager.ReadObject(addrRead, readSize, threadId);
-    PDEBUG("Unlocked from thread %lu.\n", threadId);
 }
 
 VOID WritesMem(THREADID threadId, ADDRINT addrWritten, UINT32 writeSize)
 {
-    PDEBUG("Locking from thread %lu on a write.\n", threadId);
     manager.WriteObject(addrWritten, writeSize, threadId);
-    PDEBUG("Unlocked from thread %lu.\n", threadId);
 }
 
 VOID Instruction(INS ins, VOID *v) 
@@ -192,11 +181,20 @@ INT32 Usage()
 int main(int argc, char *argv[]) 
 {
     PIN_InitLock(&cacheLock);
+    
+    PIN_InitSymbols();
     if (PIN_Init(argc, argv)) 
     {
         return Usage();
     }
-    PIN_InitSymbols();
+
+    tls_key = PIN_CreateThreadDataKey(NULL);
+    if (tls_key == INVALID_TLS_KEY)
+    {
+        cerr << "number of already allocated keys reached the MAX_CLIENT_TLS_KEYS limit" << endl;
+        PIN_ExitProcess(1);
+    }
+
     traceFile.open(knobOutputFile.Value().c_str());
     traceFile.setf(ios::showbase);
     traceFile << "{" << endl << "\t\"objects\" : [" << endl; // Begin JSON
