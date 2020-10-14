@@ -19,10 +19,15 @@
 #endif // TARGET_MAC
 
 #ifdef PROF_DEBUG
-#define PDEBUG(fmt, args...) fprintf(stderr, fmt, ## args)
+#define PDEBUG(fmt, args...) printf(fmt, ## args)
 #else
 #define PDEBUG(fmt, args...)
 #endif // PROF_DEBUG
+
+#ifdef PROF_UPDATE
+static UINT32 updateNumAllocs, updateNextThreshold;
+static PIN_LOCK updateOutputLock;
+#endif // PROF_UPDATE
 
 using namespace std;
 
@@ -31,11 +36,6 @@ static KNOB<string> knobOutputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "data.js
 static ObjectManager manager;
 static INT32 numThreads = 0;
 static TLS_KEY tls_key = INVALID_TLS_KEY; // Thread Local Storage
-static PIN_LOCK cacheLock; // CACHE_LOCK
-
-#ifdef PROF_DEBUG
-static PIN_LOCK debugLock;
-#endif
 
 VOID ThreadStart(THREADID threadId, CONTEXT *ctxt, INT32 flags, VOID* v)
 {
@@ -59,6 +59,17 @@ VOID ThreadFini(THREADID threadId, const CONTEXT *ctxt, INT32 code, VOID* v)
 //
 VOID MallocBefore(THREADID threadId, CONTEXT *ctxt, ADDRINT size)
 {
+    #ifdef PROF_UPDATE
+    PIN_GetLock(&updateOutputLock, threadId);
+    updateNumAllocs++;
+    if (updateNumAllocs >= updateNextThreshold)
+    {
+        cout << "Number of Allocations: " << updateNumAllocs << endl;
+        updateNextThreshold <<= 1;
+    }
+    PIN_ReleaseLock(&updateOutputLock);
+    #endif
+
     pair<ADDRINT, Backtrace>* threadCache = static_cast<pair<ADDRINT, Backtrace>*>(PIN_GetThreadData(tls_key, threadId));
     threadCache->second.SetTrace(ctxt);
     threadCache->first = size;
@@ -66,12 +77,13 @@ VOID MallocBefore(THREADID threadId, CONTEXT *ctxt, ADDRINT size)
 
 VOID MallocAfter(THREADID threadId, ADDRINT retVal)
 {
-    pair<ADDRINT, Backtrace>* threadCache = static_cast<pair<ADDRINT, Backtrace>*>(PIN_GetThreadData(tls_key, threadId));
-    UINT32 size = threadCache->first;
-    Backtrace b = threadCache->second;
     // Check for success since we don't want to track null pointers
     //
     if ((VOID *) retVal == nullptr) { return; }
+
+    pair<ADDRINT, Backtrace>* threadCache = static_cast<pair<ADDRINT, Backtrace>*>(PIN_GetThreadData(tls_key, threadId));
+    UINT32 size = threadCache->first;
+    Backtrace b = threadCache->second;
     manager.AddObject(retVal, size, b, threadId);
 }
 
@@ -180,9 +192,14 @@ INT32 Usage()
 
 int main(int argc, char *argv[]) 
 {
-    PIN_InitLock(&cacheLock);
-    
     PIN_InitSymbols();
+
+    #ifdef PROF_UPDATE
+    updateNumAllocs = 0;
+    updateNextThreshold = 1;
+    PIN_InitLock(&updateOutputLock);
+    #endif
+
     if (PIN_Init(argc, argv)) 
     {
         return Usage();
@@ -198,6 +215,7 @@ int main(int argc, char *argv[])
     traceFile.open(knobOutputFile.Value().c_str());
     traceFile.setf(ios::showbase);
     traceFile << "{" << endl << "\t\"objects\" : [" << endl; // Begin JSON
+
     IMG_AddInstrumentFunction(Image, 0);
     INS_AddInstrumentFunction(Instruction, 0);
     PIN_AddThreadStartFunction(ThreadStart, 0);

@@ -98,6 +98,10 @@ class ObjectData
             for (ADDRINT i = offset; i < offset + readSize; i++)
             {
                 PIN_GetLock(&readBitmapLock, -1);
+                if (i >= readBitmap.size()) { // Break if read exceeds size of bitmap
+                    PIN_ReleaseLock(&readBitmapLock);
+                    break; 
+                }
                 readBitmap[i] = 1;
                 PIN_ReleaseLock(&readBitmapLock);
             }
@@ -110,6 +114,10 @@ class ObjectData
             for (ADDRINT i = offset; i < offset + writeSize; i++)
             {
                 PIN_GetLock(&writeBitmapLock, -1);
+                if (i >= writeBitmap.size()) {
+                    PIN_ReleaseLock(&writeBitmapLock);
+                    break; 
+                }
                 writeBitmap[i] = 1;
                 PIN_ReleaseLock(&writeBitmapLock);
             }
