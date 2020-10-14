@@ -19,10 +19,15 @@
 #endif // TARGET_MAC
 
 #ifdef PROF_DEBUG
-#define PDEBUG(fmt, args...) fprintf(stderr, fmt, ## args)
+#define PDEBUG(fmt, args...) printf(fmt, ## args)
 #else
 #define PDEBUG(fmt, args...)
 #endif // PROF_DEBUG
+
+#ifdef PROF_UPDATE
+static UINT32 updateNumAllocs, updateNextThreshold;
+static PIN_LOCK updateOutputLock;
+#endif // PROF_UPDATE
 
 using namespace std;
 
@@ -31,10 +36,6 @@ static KNOB<string> knobOutputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "data.js
 static ObjectManager manager;
 static unordered_map<THREADID, pair<ADDRINT, Backtrace>> cache;
 static PIN_LOCK cacheLock; // CACHE_LOCK
-
-#ifdef PROF_DEBUG
-static PIN_LOCK debugLock;
-#endif
 
 VOID ThreadStart(THREADID threadId, CONTEXT *ctxt, INT32 flags, VOID* v)
 {
@@ -53,29 +54,37 @@ VOID ThreadFini(THREADID threadId, const CONTEXT *ctxt, INT32 code, VOID* v)
 //
 VOID MallocBefore(THREADID threadId, CONTEXT *ctxt, ADDRINT size)
 {
-    PDEBUG("Locking from thread %lu before a malloc...\n", threadId);
+    #ifdef PROF_UPDATE
+    PIN_GetLock(&updateOutputLock, threadId);
+    updateNumAllocs++;
+    if (updateNumAllocs >= updateNextThreshold)
+    {
+        cout << "Number of Allocations: " << updateNumAllocs << endl;
+        updateNextThreshold <<= 1;
+    }
+    PIN_ReleaseLock(&updateOutputLock);
+    #endif
+
     Backtrace b;
     b.SetTrace(ctxt);
     PIN_GetLock(&cacheLock, threadId); // CACHE_LOCK
     cache[threadId] = make_pair(size, b);
     PIN_ReleaseLock(&cacheLock);
-    PDEBUG("Unlocked from thread %lu.\n", threadId);
 }
 
 VOID MallocAfter(THREADID threadId, ADDRINT retVal)
 {
     UINT32 size; // CACHE_LOCK
     Backtrace b;
-    PDEBUG("Locking from thread %lu after a malloc...\n", threadId);
     PIN_GetLock(&cacheLock, threadId);
     size = (UINT32) cache[threadId].first;
     b = cache[threadId].second;
     PIN_ReleaseLock(&cacheLock);
+
     // Check for success since we don't want to track null pointers
     //
     if ((VOID *) retVal == nullptr) { return; }
     manager.AddObject(retVal, size, b, threadId);
-    PDEBUG("Unlocked from thread %lu.\n", threadId);
 }
 
 VOID FreeHook(THREADID threadId, CONTEXT* ctxt, ADDRINT ptr)
@@ -83,8 +92,6 @@ VOID FreeHook(THREADID threadId, CONTEXT* ctxt, ADDRINT ptr)
     // Value of sizeThreshold is somewhat arbitrary, just using 2^20 for now
     //
     static const UINT32 sizeThreshold = 1048576;
-
-    PDEBUG("Locking from thread %lu on a free...\n", threadId);
 
     manager.RemoveObject(ptr, ctxt, threadId);
 
@@ -95,22 +102,16 @@ VOID FreeHook(THREADID threadId, CONTEXT* ctxt, ADDRINT ptr)
     {
         manager.ClearDeadObjects(traceFile);
     }
-
-    PDEBUG("Unlocked from thread %lu.\n", threadId);
 }
 
 VOID ReadsMem(THREADID threadId, ADDRINT addrRead, UINT32 readSize)
 {
-    PDEBUG("Locking from thread %lu on a read...\n", threadId);
     manager.ReadObject(addrRead, readSize, threadId);
-    PDEBUG("Unlocked from thread %lu.\n", threadId);
 }
 
 VOID WritesMem(THREADID threadId, ADDRINT addrWritten, UINT32 writeSize)
 {
-    PDEBUG("Locking from thread %lu on a write.\n", threadId);
     manager.WriteObject(addrWritten, writeSize, threadId);
-    PDEBUG("Unlocked from thread %lu.\n", threadId);
 }
 
 VOID Instruction(INS ins, VOID *v) 
@@ -192,14 +193,22 @@ INT32 Usage()
 int main(int argc, char *argv[]) 
 {
     PIN_InitLock(&cacheLock);
+    #ifdef PROF_UPDATE
+    updateNumAllocs = 0;
+    updateNextThreshold = 1;
+    PIN_InitLock(&updateOutputLock);
+    #endif
+
     if (PIN_Init(argc, argv)) 
     {
         return Usage();
     }
     PIN_InitSymbols();
+
     traceFile.open(knobOutputFile.Value().c_str());
     traceFile.setf(ios::showbase);
     traceFile << "{" << endl << "\t\"objects\" : [" << endl; // Begin JSON
+
     IMG_AddInstrumentFunction(Image, 0);
     INS_AddInstrumentFunction(Instruction, 0);
     PIN_AddThreadStartFunction(ThreadStart, 0);
