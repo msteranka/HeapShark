@@ -5,6 +5,7 @@
 #include <iostream>
 #include <new>
 #include <vector>
+#include <stdatomic.h>
 #include "backtrace.hpp"
 
 using namespace std;
@@ -12,18 +13,23 @@ using namespace std;
 class ObjectData
 {
     public:
-        ObjectData(ADDRINT addr, UINT32 size) : 
+        ObjectData(ADDRINT addr, UINT32 size, THREADID mallocThread) : 
             addr(addr),
             size(size),
-            numReads(0),
-            numWrites(0),
-            bytesRead(0),
-            bytesWritten(0),
-            readBitset(size, 0),
-            writeBitset(size, 0)
-        { }
+            mallocThread(mallocThread),
+            freeThread(-1),
+            readBitmap(size, 0),
+            writeBitmap(size, 0)
+        { 
+            atomic_init(&numReads, 0);
+            atomic_init(&numWrites, 0);
+            atomic_init(&bytesRead, 0);
+            atomic_init(&bytesWritten, 0);
+            PIN_InitLock(&readBitmapLock);
+            PIN_InitLock(&writeBitmapLock);
+        }
 
-        pair<double,double> CalculateCoverage()
+        pair<double,double> CalculateCoverage() // NOT THREAD-SAFE
         {
             double readCoverage, writeCoverage;
             UINT32 bitsRead, bitsWritten;
@@ -35,11 +41,11 @@ class ObjectData
             //
             for (UINT32 i = 0; i < size; i++)
             {
-                if (readBitset[i])
+                if (readBitmap[i])
                 {
                     bitsRead++;
                 }
-                if (writeBitset[i])
+                if (writeBitmap[i])
                 {
                     bitsWritten++;
                 }
@@ -49,44 +55,51 @@ class ObjectData
             return make_pair<double,double>(readCoverage, writeCoverage);
         }
 
-        double GetReadFactor() { return (double) numReads / bytesRead; }
-
-        double GetWriteFactor() { return (double) numWrites / bytesWritten; }
-
         ADDRINT GetAddr() { return addr; }
 
         UINT32 GetSize() { return size; }
 
-        VOID SetMallocTrace(Backtrace &b) { mallocTrace = b; }
+        THREADID GetMallocThread() { return mallocThread; } // NOT THREAD-SAFE
 
-        VOID SetFreeTrace(CONTEXT *ctxt) { freeTrace.SetTrace(ctxt); }
+        THREADID GetFreeThread() { return freeThread; } // NOT THREAD-SAFE
 
-        UINT32 GetNumReads() { return numReads; }
+        VOID SetFreeThread(THREADID freeThread) { this->freeThread = freeThread; } // NOT THREAD-SAFE
 
-        VOID SetNumReads(UINT32 numReads) { this->numReads = numReads; }
+        VOID SetMallocTrace(Backtrace &b) { mallocTrace = b; } // NOT THREAD-SAFE
 
-        UINT32 GetBytesRead() { return bytesRead; }
+        VOID SetFreeTrace(CONTEXT *ctxt) { freeTrace.SetTrace(ctxt); } // NOT THREAD-SAFE
 
-        VOID SetBytesRead(UINT32 bytesRead) { this->bytesRead = bytesRead; }
+        UINT32 GetNumReads() { return atomic_load(&numReads); }
 
-        UINT32 GetNumWrites() { return numWrites; }
+        VOID IncrementNumReads() { atomic_fetch_add(&numReads, 1); }
 
-        VOID SetNumWrites(UINT32 numWrites) { this->numWrites = numWrites; }
+        UINT32 GetBytesRead() { return atomic_load(&bytesRead); }
 
-        UINT32 GetBytesWritten() { return bytesWritten; }
+        VOID AddBytesRead(UINT32 bytesRead) { atomic_fetch_add(&(this->bytesRead), bytesRead); }
 
-        VOID SetBytesWritten(UINT32 bytesWritten) { this->bytesWritten = bytesWritten; }
+        UINT32 GetNumWrites() { return atomic_load(&numWrites); }
+
+        VOID IncrementNumWrites() { atomic_fetch_add(&numWrites, 1); }
+
+        UINT32 GetBytesWritten() { return atomic_load(&bytesWritten); }
+
+        VOID AddBytesWritten(UINT32 bytesWritten) { atomic_fetch_add(&(this->bytesWritten), bytesWritten); }
 
         VOID UpdateReadCoverage(ADDRINT addrRead, UINT32 readSize)
         {
             ADDRINT offset;
 
-            // Write to readBitset at the same offset the object is being read
+            // Write to readBitmap at the same offset the object is being read
+            // TODO: We actually may not have to use a lock to modify readBitmap
+            // Maybe obtain an iterator to the desired element and modify it
+            // atomically?
             //
             offset = addrRead - addr;
             for (ADDRINT i = offset; i < offset + readSize; i++)
             {
-                readBitset[i] = 1;
+                PIN_GetLock(&readBitmapLock, -1);
+                readBitmap[i] = 1;
+                PIN_ReleaseLock(&readBitmapLock);
             }
         }
 
@@ -96,23 +109,28 @@ class ObjectData
             offset = addrWritten - addr;
             for (ADDRINT i = offset; i < offset + writeSize; i++)
             {
-                writeBitset[i] = 1;
+                PIN_GetLock(&writeBitmapLock, -1);
+                writeBitmap[i] = 1;
+                PIN_ReleaseLock(&writeBitmapLock);
             }
         }
 
-        pair<Backtrace,Backtrace> GetTrace()
+        pair<Backtrace,Backtrace> GetTrace() // NOT THREAD-SAFE
         {
             return make_pair<Backtrace,Backtrace>(mallocTrace, freeTrace);
         }
 
     private:
-        ADDRINT addr;
-        UINT32 size, numReads, numWrites, bytesRead, bytesWritten;
-        vector<BOOL> readBitset, writeBitset;
+        const ADDRINT addr;
+        const UINT32 size;
+        atomic_int numReads, numWrites, bytesRead, bytesWritten;
+        THREADID mallocThread, freeThread;
         Backtrace mallocTrace, freeTrace;
+        vector<BOOL> readBitmap, writeBitmap;
+        PIN_LOCK readBitmapLock, writeBitmapLock;
 };
 
-ostream& operator<<(ostream& os, ObjectData& data) 
+ostream& operator<<(ostream& os, ObjectData& data) // NOT THREAD-SAFE
 {
     pair<double,double> coverage;
     pair<Backtrace,Backtrace> trace;
@@ -129,6 +147,8 @@ ostream& operator<<(ostream& os, ObjectData& data)
             "\t\t\t\"bytesWritten\" : " << data.GetBytesWritten() << "," << endl <<
             "\t\t\t\"readCoverage\" : " << coverage.first << "," << endl <<
             "\t\t\t\"writeCoverage\" : " << coverage.second << "," << endl <<
+            "\t\t\t\"allocatingThread\" : " << (INT32) data.GetMallocThread() << "," << endl <<
+            "\t\t\t\"freeingThread\" : " << (INT32) data.GetFreeThread() << "," << endl <<
             "\t\t\t\"mallocBacktrace\" : " << trace.first << "," << endl <<
             "\t\t\t\"freeBacktrace\" : " << trace.second << endl <<
             "\t\t}";

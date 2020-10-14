@@ -29,16 +29,20 @@ using namespace std;
 static ofstream traceFile;
 static KNOB<string> knobOutputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "data.json", "specify profiling file name");
 static ObjectManager manager;
-static PIN_LOCK lock;
 static unordered_map<THREADID, pair<ADDRINT, Backtrace>> cache;
+static PIN_LOCK cacheLock; // CACHE_LOCK
 
-VOID ThreadStart(THREADID threadid, CONTEXT* ctxt, INT32 flags, VOID* v)
+#ifdef PROF_DEBUG
+static PIN_LOCK debugLock;
+#endif
+
+VOID ThreadStart(THREADID threadId, CONTEXT *ctxt, INT32 flags, VOID* v)
 {
     // This will be called each time a thread is created.
     // We don't need it at the moment but I'm leaving it in for future reference.
 }
 
-VOID ThreadFini(THREADID threadid, const CONTEXT* ctxt, INT32 code, VOID* v)
+VOID ThreadFini(THREADID threadId, const CONTEXT *ctxt, INT32 code, VOID* v)
 {
     // This will be called each time a thread is destroyed.
     // We don't need it at the moment but I'm leaving it in for future reference.
@@ -47,69 +51,66 @@ VOID ThreadFini(THREADID threadid, const CONTEXT* ctxt, INT32 code, VOID* v)
 // Function arguments and backtrace can only be accessed at the function entry point
 // Thus, we must insert a routine before malloc and cache these values
 //
-VOID MallocBefore(THREADID threadid, CONTEXT* ctxt, ADDRINT size)
+VOID MallocBefore(THREADID threadId, CONTEXT *ctxt, ADDRINT size)
 {
-    PIN_GetLock(&lock, threadid + 1);
-    PDEBUG("Locking from thread %lu before a malloc...\n", threadid);
+    PDEBUG("Locking from thread %lu before a malloc...\n", threadId);
     Backtrace b;
     b.SetTrace(ctxt);
-    cache[threadid] = make_pair(size, b);
-    PDEBUG("Unlocked from thread %lu.\n", threadid);
-    PIN_ReleaseLock(&lock);
+    PIN_GetLock(&cacheLock, threadId); // CACHE_LOCK
+    cache[threadId] = make_pair(size, b);
+    PIN_ReleaseLock(&cacheLock);
+    PDEBUG("Unlocked from thread %lu.\n", threadId);
 }
 
-VOID MallocAfter(THREADID threadid, ADDRINT retVal)
+VOID MallocAfter(THREADID threadId, ADDRINT retVal)
 {
-    if ((VOID *) retVal == nullptr) // Check for success since we don't want to track null pointers
-    {
-        return;
-    }
-    PIN_GetLock(&lock, threadid + 1);
-    PDEBUG("Locking from thread %lu after a malloc...\n", threadid);
-    manager.AddObject(retVal, (UINT32) cache[threadid].first, cache[threadid].second);
-    PDEBUG("Unlocked from thread %lu.\n", threadid);
-    PIN_ReleaseLock(&lock);
+    UINT32 size; // CACHE_LOCK
+    Backtrace b;
+    PDEBUG("Locking from thread %lu after a malloc...\n", threadId);
+    PIN_GetLock(&cacheLock, threadId);
+    size = (UINT32) cache[threadId].first;
+    b = cache[threadId].second;
+    PIN_ReleaseLock(&cacheLock);
+    // Check for success since we don't want to track null pointers
+    //
+    if ((VOID *) retVal == nullptr) { return; }
+    manager.AddObject(retVal, size, b, threadId);
+    PDEBUG("Unlocked from thread %lu.\n", threadId);
 }
 
-VOID FreeHook(THREADID threadid, CONTEXT* ctxt, ADDRINT ptr)
+VOID FreeHook(THREADID threadId, CONTEXT* ctxt, ADDRINT ptr)
 {
     // Value of sizeThreshold is somewhat arbitrary, just using 2^20 for now
     //
     static const UINT32 sizeThreshold = 1048576;
 
-    PIN_GetLock(&lock, threadid + 1);
-    PDEBUG("Locking from thread %lu on a free...\n", threadid);
+    PDEBUG("Locking from thread %lu on a free...\n", threadId);
 
-    manager.RemoveObject(ptr, ctxt);
+    manager.RemoveObject(ptr, ctxt, threadId);
 
     // Write out all data to output file every sizeThreshold in the event that the 
     // application makes a lot of allocations
     //
-    if (manager.GetTotalObjects()->size() >= sizeThreshold)
+    if (manager.GetNumDeadObjects() >= sizeThreshold)
     {
-        manager.ClearDeadObjects(traceFile, sizeThreshold);
+        manager.ClearDeadObjects(traceFile);
     }
 
-    PDEBUG("Unlocked from thread %lu.\n", threadid);
-    PIN_ReleaseLock(&lock);
+    PDEBUG("Unlocked from thread %lu.\n", threadId);
 }
 
-VOID ReadsMem(THREADID threadid, ADDRINT addrRead, UINT32 readSize)
+VOID ReadsMem(THREADID threadId, ADDRINT addrRead, UINT32 readSize)
 {
-    PIN_GetLock(&lock, threadid + 1);
-    PDEBUG("Locking from thread %lu on a read...\n", threadid);
-    manager.ReadObject(addrRead, readSize);
-    PDEBUG("Unlocked from thread %lu.\n", threadid);
-    PIN_ReleaseLock(&lock);
+    PDEBUG("Locking from thread %lu on a read...\n", threadId);
+    manager.ReadObject(addrRead, readSize, threadId);
+    PDEBUG("Unlocked from thread %lu.\n", threadId);
 }
 
-VOID WritesMem(THREADID threadid, ADDRINT addrWritten, UINT32 writeSize)
+VOID WritesMem(THREADID threadId, ADDRINT addrWritten, UINT32 writeSize)
 {
-    PIN_GetLock(&lock, threadid + 1);
-    PDEBUG("Locking from thread %lu on a write.\n", threadid);
-    manager.WriteObject(addrWritten, writeSize);
-    PDEBUG("Unlocked from thread %lu.\n", threadid);
-    PIN_ReleaseLock(&lock);
+    PDEBUG("Locking from thread %lu on a write.\n", threadId);
+    manager.WriteObject(addrWritten, writeSize, threadId);
+    PDEBUG("Unlocked from thread %lu.\n", threadId);
 }
 
 VOID Instruction(INS ins, VOID *v) 
@@ -190,7 +191,7 @@ INT32 Usage()
 
 int main(int argc, char *argv[]) 
 {
-    PIN_InitLock(&lock);
+    PIN_InitLock(&cacheLock);
     if (PIN_Init(argc, argv)) 
     {
         return Usage();

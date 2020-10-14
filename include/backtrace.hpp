@@ -8,6 +8,9 @@ using namespace std;
 
 static const INT32 maxDepth = 3;
 
+// Nothing within Backtrace is thread-safe since all of its
+// methods are only ever executed by one thread
+//
 class Backtrace 
 {
     public:
