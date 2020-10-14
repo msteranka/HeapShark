@@ -40,7 +40,7 @@ static TLS_KEY tls_key = INVALID_TLS_KEY; // Thread Local Storage
 VOID ThreadStart(THREADID threadId, CONTEXT *ctxt, INT32 flags, VOID* v)
 {
     numThreads++;
-    pair<ADDRINT, Backtrace>* threadCache = new pair<ADDRINT, Backtrace>();
+    pair<ADDRINT, Backtrace> *threadCache = new pair<ADDRINT, Backtrace>();
     if (PIN_SetThreadData(tls_key, threadCache, threadId) == FALSE)
     {
         cerr << "PIN_SetThreadData failed." << endl;
@@ -50,7 +50,7 @@ VOID ThreadStart(THREADID threadId, CONTEXT *ctxt, INT32 flags, VOID* v)
 
 VOID ThreadFini(THREADID threadId, const CONTEXT *ctxt, INT32 code, VOID* v)
 {
-    pair<ADDRINT, Backtrace>* threadCache = static_cast<pair<ADDRINT, Backtrace>*>(PIN_GetThreadData(tls_key, threadId));
+    pair<ADDRINT, Backtrace> *threadCache = static_cast<pair<ADDRINT, Backtrace>*>(PIN_GetThreadData(tls_key, threadId));
     delete threadCache;
 }
 
@@ -70,7 +70,7 @@ VOID MallocBefore(THREADID threadId, CONTEXT *ctxt, ADDRINT size)
     PIN_ReleaseLock(&updateOutputLock);
     #endif
 
-    pair<ADDRINT, Backtrace>* threadCache = static_cast<pair<ADDRINT, Backtrace>*>(PIN_GetThreadData(tls_key, threadId));
+    pair<ADDRINT, Backtrace> *threadCache = static_cast<pair<ADDRINT, Backtrace>*>(PIN_GetThreadData(tls_key, threadId));
     threadCache->second.SetTrace(ctxt);
     threadCache->first = size;
 }
@@ -81,7 +81,7 @@ VOID MallocAfter(THREADID threadId, ADDRINT retVal)
     //
     if ((VOID *) retVal == nullptr) { return; }
 
-    pair<ADDRINT, Backtrace>* threadCache = static_cast<pair<ADDRINT, Backtrace>*>(PIN_GetThreadData(tls_key, threadId));
+    pair<ADDRINT, Backtrace> *threadCache = static_cast<pair<ADDRINT, Backtrace>*>(PIN_GetThreadData(tls_key, threadId));
     UINT32 size = threadCache->first;
     Backtrace b = threadCache->second;
     manager.AddObject(retVal, size, b, threadId);
