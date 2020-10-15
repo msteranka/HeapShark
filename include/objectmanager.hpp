@@ -4,6 +4,8 @@
 #include "pin.H"
 #include <unordered_map>
 #include <vector>
+#include <iostream>
+#include <cassert>
 
 using namespace std;
 
@@ -29,8 +31,6 @@ class ObjectManager
             d->SetMallocTrace(trace);
 
             // Create a mapping from every address in this object's range to the same ObjectData
-            // TODO: Is it more efficient to just grab the lock once and execute the loop
-            // than it is to grab the lock every iteration?
             //
             for (UINT32 i = 0; i < size; i++)
             {
@@ -155,12 +155,18 @@ class ObjectManager
         }
 
         // Write out contents of deadObjects to os and empty deadObjects
+        // if deadObjects.size() >= sizeThreshold
         //
-        VOID ClearDeadObjects(ostream& os)
+        VOID ClearDeadObjects(ostream& os, UINT32 sizeThreshold)
         {
             vector<ObjectData*>::iterator it;
 
             PIN_GetLock(&deadObjectsLock, -1);
+            if (deadObjects.size() < sizeThreshold)
+            {
+                PIN_ReleaseLock(&deadObjectsLock);
+                return;
+            }
             while (deadObjects.size() > 0)
             {
                 // Written out in reverse order to take advantage of pop_back
@@ -178,15 +184,6 @@ class ObjectManager
         //
         vector<ObjectData*> *GetDeadObjects() { return &deadObjects; }
 
-        UINT32 GetNumDeadObjects()
-        {
-            UINT32 size;
-            PIN_GetLock(&deadObjectsLock, -1);
-            size = deadObjects.size();
-            PIN_ReleaseLock(&deadObjectsLock);
-            return size;
-        }
-        
     private:
         unordered_map<ADDRINT,ObjectData*> liveObjects;
         vector<ObjectData*> deadObjects;

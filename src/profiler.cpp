@@ -87,7 +87,7 @@ VOID MallocAfter(THREADID threadId, ADDRINT retVal)
     manager.AddObject(retVal, size, b, threadId);
 }
 
-VOID FreeHook(THREADID threadId, CONTEXT* ctxt, ADDRINT ptr)
+VOID FreeHook(THREADID threadId, CONTEXT *ctxt, ADDRINT ptr)
 {
     // Value of sizeThreshold is somewhat arbitrary, just using 2^20 for now
     //
@@ -98,10 +98,7 @@ VOID FreeHook(THREADID threadId, CONTEXT* ctxt, ADDRINT ptr)
     // Write out all data to output file every sizeThreshold in the event that the 
     // application makes a lot of allocations
     //
-    if (manager.GetNumDeadObjects() >= sizeThreshold)
-    {
-        manager.ClearDeadObjects(traceFile);
-    }
+    manager.ClearDeadObjects(traceFile, sizeThreshold);
 }
 
 VOID ReadsMem(THREADID threadId, ADDRINT addrRead, UINT32 readSize)
