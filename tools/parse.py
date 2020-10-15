@@ -1,6 +1,6 @@
 import json
 
-json_file = '../src/data.json'
+json_file = '../src/heapshark.json'
 
 with open(json_file, 'r') as f:
     data = json.load(f)

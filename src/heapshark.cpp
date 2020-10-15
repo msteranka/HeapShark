@@ -18,21 +18,21 @@
 #define FREE "free"
 #endif // TARGET_MAC
 
-#ifdef PROF_DEBUG
+#ifdef HEAP_SHARK_DEBUG
 #define PDEBUG(fmt, args...) printf(fmt, ## args)
 #else
 #define PDEBUG(fmt, args...)
-#endif // PROF_DEBUG
+#endif // HEAP_SHARK_DEBUG
 
-#ifdef PROF_UPDATE
+#ifdef HEAP_SHARK_UPDATE
 static UINT32 updateNumAllocs, updateNextThreshold;
 static PIN_LOCK updateOutputLock;
-#endif // PROF_UPDATE
+#endif // HEAP_SHARK_UPDATE
 
 using namespace std;
 
 static ofstream traceFile;
-static KNOB<string> knobOutputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "data.json", "specify profiling file name");
+static KNOB<string> knobOutputFile(KNOB_MODE_WRITEONCE, "pintool", "o", "heapshark.json", "specify profiling file name");
 static ObjectManager manager;
 static INT32 numThreads = 0;
 static TLS_KEY tls_key = INVALID_TLS_KEY; // Thread Local Storage
@@ -59,7 +59,7 @@ VOID ThreadFini(THREADID threadId, const CONTEXT *ctxt, INT32 code, VOID* v)
 //
 VOID MallocBefore(THREADID threadId, CONTEXT *ctxt, ADDRINT size)
 {
-    #ifdef PROF_UPDATE
+    #ifdef HEAP_SHARK_UPDATE
     PIN_GetLock(&updateOutputLock, threadId);
     updateNumAllocs++;
     if (updateNumAllocs >= updateNextThreshold)
@@ -183,7 +183,8 @@ VOID Fini(INT32 code, VOID *v)
 
 INT32 Usage() 
 {
-    cerr << "This tool tracks the usage of objects returned by malloc." << endl;
+    cerr << "HeapShark identifies allocations that can be replaced "
+            "with stack allocation or custom allocation routines" << endl;
     return EXIT_FAILURE;
 }
 
@@ -191,7 +192,7 @@ int main(int argc, char *argv[])
 {
     PIN_InitSymbols();
 
-    #ifdef PROF_UPDATE
+    #ifdef HEAP_SHARK_UPDATE
     updateNumAllocs = 0;
     updateNextThreshold = 1;
     PIN_InitLock(&updateOutputLock);

@@ -24,7 +24,7 @@ TEST_ROOTS :=
 
 # This defines the tools which will be run during the the tests, and were not already defined in
 # TEST_TOOL_ROOTS.
-TOOL_ROOTS := profiler
+TOOL_ROOTS := heapshark
 
 # This defines the static analysis tools which will be run during the the tests. They should not
 # be defined in TEST_TOOL_ROOTS. If a test with the same name exists, it should be defined in
@@ -61,13 +61,13 @@ SANITY_SUBSET := $(TEST_TOOL_ROOTS) $(TEST_ROOTS)
 # This section contains the build rules for all binaries that have special build rules.
 # See makefile.default.rules for the default build rules.
 
-# PROF_FLAGS = -DPROF_DEBUG
-# PROF_FLAGS = -DPROF_UPDATE
-PROF_FLAGS =
-PROF_INCLUDES = -I../include
+# HEAP_SHARK_FLAGS = -DHEAP_SHARK_DEBUG
+# HEAP_SHARK_FLAGS = -DHEAP_SHARK_UPDATE
+HEAP_SHARK_FLAGS =
+HEAP_SHARK_INCLUDES = -I../include
 
-$(OBJDIR)profiler$(OBJ_SUFFIX): profiler.cpp
-	$(CXX) $(TOOL_CXXFLAGS) $(PROF_FLAGS) $(PROF_INCLUDES) $(COMP_OBJ) $@ $<
+$(OBJDIR)heapshark$(OBJ_SUFFIX): heapshark.cpp
+	$(CXX) $(TOOL_CXXFLAGS) $(HEAP_SHARK_FLAGS) $(HEAP_SHARK_INCLUDES) $(COMP_OBJ) $@ $<
 
-$(OBJDIR)profiler$(PINTOOL_SUFFIX): $(OBJDIR)profiler$(OBJ_SUFFIX)
-	$(LINKER) $(TOOL_LDFLAGS) $(PROF_FLAGS) $(PROF_INCLUDES) $(LINK_EXE) $@ $< $(TOOL_LPATHS) $(TOOL_LIBS)
+$(OBJDIR)heapshark$(PINTOOL_SUFFIX): $(OBJDIR)heapshark$(OBJ_SUFFIX)
+	$(LINKER) $(TOOL_LDFLAGS) $(HEAP_SHARK_FLAGS) $(HEAP_SHARK_INCLUDES) $(LINK_EXE) $@ $< $(TOOL_LPATHS) $(TOOL_LIBS)

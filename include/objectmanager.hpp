@@ -4,8 +4,6 @@
 #include "pin.H"
 #include <unordered_map>
 #include <vector>
-#include <iostream>
-#include <cassert>
 
 using namespace std;
 
