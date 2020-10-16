@@ -113,18 +113,22 @@ VOID WritesMem(THREADID threadId, ADDRINT addrWritten, UINT32 writeSize)
 
 VOID Instruction(INS ins, VOID *v) 
 {
-    if (INS_IsMemoryRead(ins)) 
+    if (INS_IsMemoryRead(ins) && !INS_IsStackRead(ins)) 
     {
-        INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR) ReadsMem, // Intercept all read instructions with ReadsMem
+        // Intercept read instructions that don't read from the stack with ReadsMem
+        //
+        INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR) ReadsMem,
                         IARG_THREAD_ID,
                         IARG_MEMORYREAD_EA,
                         IARG_MEMORYREAD_SIZE,
                         IARG_END);
     }
 
-    if (INS_IsMemoryWrite(ins)) 
+    if (INS_IsMemoryWrite(ins) && !INS_IsStackWrite(ins)) 
     {
-        INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR) WritesMem, // Intercept all write instructions with WritesMem
+        // Intercept write instructions that don't write to the stack with WritesMem
+        //
+        INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR) WritesMem,
                         IARG_THREAD_ID,
                         IARG_MEMORYWRITE_EA,
                         IARG_MEMORYWRITE_SIZE,
